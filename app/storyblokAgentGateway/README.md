@@ -211,7 +211,7 @@ exist yet) and add this to its `Resource` list, replacing `<region>`/`<account-i
     "arn:aws:bedrock-agentcore:<region>:<account-id>:token-vault/default",
     "arn:aws:bedrock-agentcore:<region>:<account-id>:workload-identity-directory/default",
     "arn:aws:bedrock-agentcore:<region>:<account-id>:token-vault/default/apikeycredentialprovider/storyblok-mcp-pat",
-    "arn:aws:bedrock-agentcore:<region>:<account-id>:workload-identity-directory/default/workload-identity/SBMCP"
+    "arn:aws:bedrock-agentcore:<region>:<account-id>:workload-identity-directory/default/workload-identity/<gateway>"
 ]
 ```
 
