@@ -1,0 +1,9 @@
+# Local MCP server config -- contains a live Storyblok PAT for this machine's
+# own Claude Code session, never meant to be committed.
+.mcp.json
+
+# Local backups created during cleanup passes
+backups/
+
+# OS
+.DS_Store

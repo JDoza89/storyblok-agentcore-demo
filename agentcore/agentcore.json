@@ -7,20 +7,100 @@
     "agentcore:created-by": "agentcore-cli",
     "agentcore:project-name": "reInventDemo"
   },
-  "runtimes": [],
+  "runtimes": [
+    {
+      "name": "storyblokAgent",
+      "build": "CodeZip",
+      "entrypoint": "main.py",
+      "codeLocation": "app/storyblokAgent/",
+      "runtimeVersion": "PYTHON_3_14",
+      "networkMode": "PUBLIC",
+      "protocol": "HTTP"
+    },
+    {
+      "name": "storyblokAgentGateway",
+      "build": "CodeZip",
+      "entrypoint": "main.py",
+      "codeLocation": "app/storyblokAgentGateway/",
+      "runtimeVersion": "PYTHON_3_14",
+      "networkMode": "PUBLIC",
+      "protocol": "HTTP"
+    }
+  ],
   "memories": [],
   "knowledgeBases": [],
-  "credentials": [],
+  "credentials": [
+    {
+      "authorizerType": "ApiKeyCredentialProvider",
+      "name": "storyblok-mcp-pat"
+    },
+    {
+      "authorizerType": "ApiKeyCredentialProvider",
+      "name": "storyblok-space-id"
+    }
+  ],
   "evaluators": [],
   "onlineEvalConfigs": [],
-  "agentCoreGateways": [],
-  "policyEngines": [],
+  "agentCoreGateways": [
+    {
+      "name": "reInventDemoGateway",
+      "protocolType": "None",
+      "description": "Gateway for reInventDemoGateway",
+      "targets": [],
+      "authorizerType": "AWS_IAM",
+      "enableSemanticSearch": true,
+      "exceptionLevel": "NONE",
+      "policyEngineConfiguration": {
+        "policyEngineName": "reInventDemoPolicyEngine",
+        "mode": "ENFORCE"
+      }
+    }
+  ],
+  "unassignedTargets": [
+    {
+      "name": "storyblokMCP",
+      "targetType": "mcpServer",
+      "toolDefinitions": [
+        {
+          "name": "storyblokMCP",
+          "description": "Tool for storyblokMCP",
+          "inputSchema": {
+            "type": "object"
+          }
+        }
+      ],
+      "endpoint": "https://mcp.labs.storyblok.com/mcp",
+      "outboundAuth": {
+        "type": "NONE"
+      }
+    }
+  ],
+  "policyEngines": [
+    {
+      "name": "reInventDemoPolicyEngine",
+      "description": "Test policy engine to check if a missing policy explains the Gateway tool-call bug",
+      "policies": [
+        {
+          "name": "allowAll",
+          "description": "Allow the storyblokAgentGateway execution role to call any tool on this gateway",
+          "statement": "permit(\n  principal == AgentCore::IamEntity::\"arn:aws:iam::485530831632:role/AgentCore-reInventDemo-de-ApplicationAgentStoryblok-cZLRlHeumSb3\",\n  action,\n  resource == AgentCore::Gateway::\"arn:aws:bedrock-agentcore:us-east-1:485530831632:gateway/reinventdemo-reinventdemogateway-ianze4pdtu\"\n);",
+          "validationMode": "FAIL_ON_ANY_FINDINGS",
+          "enforcementMode": "ACTIVE",
+          "authorizationPhase": "INITIATE"
+        }
+      ]
+    }
+  ],
   "configBundles": [],
   "abTests": [],
   "harnesses": [
     {
       "name": "harnessBlok",
       "path": "app/harnessBlok"
+    },
+    {
+      "name": "myHarness",
+      "path": "app/myHarness"
     }
   ],
   "datasets": [],
