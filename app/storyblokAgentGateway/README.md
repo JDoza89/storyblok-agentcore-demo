@@ -196,70 +196,27 @@ aws bedrock-agentcore-control update-gateway-target \
   --region us-east-1
 ```
 
-### 4. Grant the Gateway's own IAM role permission to read the credential
+### 4. Update your Gateway IAM role's permission policy
 
-This is a separate role from the agent runtime's execution role -- it's the role the Gateway itself assumes when
-it needs to fetch the Storyblok PAT to attach to an outbound call for the target created above. By default it has
-no permission to read anything from the token vault, which fails silently as a generic error at `tools/call` time
-with no useful message (this was the root cause behind the Gateway invocation bug documented in
-the Gateway invocation bug encountered while building this). Find the role (via the CDK stack outputs, or
-`aws bedrock-agentcore-control get-gateway --gateway-identifier <your-gateway-id>`) and attach this as an inline
-policy named `storyblok-gateway-credential-access`, replacing every `<value>` placeholder with your own:
+Creating the Gateway in step 2 auto-creates its own IAM role -- a separate role from the agent runtime's execution
+role. By default it has no permission to read anything from the token vault, which fails silently as a generic
+error at `tools/call` time with no useful message (this was the root cause behind the Gateway invocation bug
+encountered while building this).
+
+Find that role's `storyblok-gateway-credential-access` inline policy (or create one with this name if it doesn't
+exist yet) and add this to its `Resource` list, replacing `<region>`/`<account-id>` with your own:
 
 ```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "AgentCoreGatewayApiKeyTokenVaultDefault",
-      "Effect": "Allow",
-      "Action": "bedrock-agentcore:GetResourceApiKey",
-      "Resource": [
-        "arn:aws:bedrock-agentcore:<region>:<account-id>:token-vault/default",
-        "arn:aws:bedrock-agentcore:<region>:<account-id>:workload-identity-directory/default",
-        "arn:aws:bedrock-agentcore:<region>:<account-id>:token-vault/default/apikeycredentialprovider/storyblok-mcp-pat",
-        "arn:aws:bedrock-agentcore:<region>:<account-id>:workload-identity-directory/default/workload-identity/SBMCP"
-      ]
-    },
-    {
-      "Sid": "AgentCoreGatewayApiKeyTokenVaultPerKey",
-      "Effect": "Allow",
-      "Action": "bedrock-agentcore:GetResourceApiKey",
-      "Resource": "arn:aws:bedrock-agentcore:<region>:<account-id>:token-vault/default/apikeycredentialprovider/storyblok-mcp-pat"
-    },
-    {
-      "Sid": "AgentCoreGatewaySecrets",
-      "Effect": "Allow",
-      "Action": "secretsmanager:GetSecretValue",
-      "Resource": "arn:aws:secretsmanager:<region>:<account-id>:secret:bedrock-agentcore-identity!default/apikey/storyblok-mcp-pat-*"
-    },
-    {
-      "Sid": "AgentCoreGatewayWorkloadIdentity",
-      "Effect": "Allow",
-      "Action": [
-        "bedrock-agentcore:GetWorkloadAccessToken",
-        "bedrock-agentcore:GetWorkloadAccessTokenForUserId",
-        "bedrock-agentcore:CompleteResourceTokenAuth"
-      ],
-      "Resource": "*"
-    }
-  ]
-}
+"Resource": [
+    "arn:aws:bedrock-agentcore:<region>:<account-id>:token-vault/default",
+    "arn:aws:bedrock-agentcore:<region>:<account-id>:workload-identity-directory/default",
+    "arn:aws:bedrock-agentcore:<region>:<account-id>:token-vault/default/apikeycredentialprovider/storyblok-mcp-pat",
+    "arn:aws:bedrock-agentcore:<region>:<account-id>:workload-identity-directory/default/workload-identity/SBMCP"
+]
 ```
 
-Save it as `gateway-credential-policy.json` and attach it:
-
-```bash
-aws iam put-role-policy \
-  --role-name <your-gateway-role-name> \
-  --policy-name storyblok-gateway-credential-access \
-  --policy-document file://gateway-credential-policy.json \
-  --region <region>
-```
-
-`SBMCP` in the third resource of the first statement is the target's own name (from step 3 above) -- Gateway
-resolves a workload identity scoped to that name when fetching the target's credential, so this has to match
-whatever you named your target.
+`SBMCP` in the last entry is the target's own name (from step 3 above) -- Gateway resolves a workload identity
+scoped to that name when fetching the target's credential, so this has to match whatever you named your target.
 
 ### 5. Run it locally
 
