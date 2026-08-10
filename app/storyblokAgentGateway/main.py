@@ -59,7 +59,7 @@ Follow the instructions below exactly.
 
 
 def _build_tools() -> list:
-    """Assemble this session's MCP clients.
+    """Assemble this session's tools, including MCP clients.
 
     Called per-session (from get_or_create_agent), not at module import time --
     constructing the Gateway MCPClient at module load time (before any request/
@@ -67,13 +67,19 @@ def _build_tools() -> list:
     the model actually saw. Building it per-session, inside real request
     handling, avoids that.
 
-    Deliberately MCP-clients-only, no local (non-MCP) @tool functions mixed in
-    -- confirmed via repeated deploy+invoke A/B tests that adding any local
-    tool to this agent's tool set (even registered in a separate
-    ToolRegistry.process_tools() call after construction) breaks discovery of
-    the Gateway MCPClient's own tools. Root cause not fully isolated. The same
-    mixing is fine on storyblokAgent's direct MCP connection, so this appears
-    specific to this Gateway connection.
+    Deliberately MCP-clients-only, no local (non-MCP) @tool functions mixed
+    in. Confirmed reproducible 3/3 with Cedar policies correctly in place
+    (ruling out an earlier, separate policy-wipe incident as the cause): any
+    local @tool sharing this Agent's tools list with the Gateway MCPClient
+    breaks discovery of the MCPClient's own tools. Traced through the Strands
+    SDK source (strands/tools/mcp/mcp_client.py, strands/tools/registry.py) --
+    MCPClient correctly implements ToolProvider, isn't misrouted by
+    isinstance checks, and calling its load_tools() directly in isolation
+    still returns the right tool set when nothing else shares the tools list.
+    ai_translate_story and fetch_ai_branding_guidelines are still needed for
+    the skill to fully work -- the real fix is exposing them as additional
+    Gateway targets (e.g. lambda-function-arn) so they're discovered through
+    this same MCPClient instead of as local tools, not adding them back here.
     """
     tools = []
     for mcp_client in get_all_gateway_mcp_clients():

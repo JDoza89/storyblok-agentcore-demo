@@ -4,6 +4,8 @@ import logging
 logger = logging.getLogger(__name__)
 
 STORYBLOK_SPACE_ID_CREDENTIAL_NAME = "storyblok-space-id"
+STORYBLOK_REGION_CREDENTIAL_NAME = "storyblok-region"
+STORYBLOK_PAT_CREDENTIAL_NAME = "storyblok-mcp-pat"
 
 
 def resolve_credential(provider_name: str, local_dev_env_var: str) -> str | None:
@@ -46,6 +48,17 @@ def resolve_credential(provider_name: str, local_dev_env_var: str) -> str | None
         )
         return None
     return api_key
+
+
+def resolve_storyblok_pat() -> str | None:
+    """Resolve the Storyblok Personal Access Token from AWS, never from source.
+
+    Used by tools that call Storyblok's REST API directly rather than through
+    the Gateway MCP connection -- e.g. ai_translate_story and
+    fetch_ai_branding_guidelines, which talk to Storyblok's Management API
+    outside of MCP entirely.
+    """
+    return resolve_credential(STORYBLOK_PAT_CREDENTIAL_NAME, "AGENTCORE_CREDENTIAL_STORYBLOK_MCP_PAT")
 
 
 def resolve_storyblok_space_id() -> int | None:
