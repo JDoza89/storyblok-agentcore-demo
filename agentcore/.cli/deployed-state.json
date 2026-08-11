@@ -34,15 +34,25 @@
           }
         },
         "policies": {
-          "reInventDemoPolicyEngine/allowAll": {
-            "policyId": "allowAll-uv27u_tzdl",
-            "policyArn": "arn:aws:bedrock-agentcore:us-east-1:485530831632:policy-engine/reInventDemo_reInventDemoPolicyEngine-v8ggrec_w2/policy/allowAll-uv27u_tzdl",
+          "reInventDemoPolicyEngine/denyExecuteDestructive": {
+            "policyId": "denyExecuteDestructive-6m_crq8r5_",
+            "policyArn": "arn:aws:bedrock-agentcore:us-east-1:485530831632:policy-engine/reInventDemo_reInventDemoPolicyEngine-v8ggrec_w2/policy/denyExecuteDestructive-6m_crq8r5_",
+            "engineName": "reInventDemoPolicyEngine"
+          },
+          "reInventDemoPolicyEngine/allowDiscoveryTools": {
+            "policyId": "allowDiscoveryTools-y70a1zh90n",
+            "policyArn": "arn:aws:bedrock-agentcore:us-east-1:485530831632:policy-engine/reInventDemo_reInventDemoPolicyEngine-v8ggrec_w2/policy/allowDiscoveryTools-y70a1zh90n",
+            "engineName": "reInventDemoPolicyEngine"
+          },
+          "reInventDemoPolicyEngine/allowScopedOperations": {
+            "policyId": "allowScopedOperations-8tounkuf4a",
+            "policyArn": "arn:aws:bedrock-agentcore:us-east-1:485530831632:policy-engine/reInventDemo_reInventDemoPolicyEngine-v8ggrec_w2/policy/allowScopedOperations-8tounkuf4a",
             "engineName": "reInventDemoPolicyEngine"
           }
         },
         "stackName": "AgentCore-reInventDemo-default",
         "identityKmsKeyArn": "arn:aws:kms:us-east-1:485530831632:key/a93a058a-1d3b-4529-b023-d1c207ed049a",
-        "deployHash": "69343d49818ffafc"
+        "deployHash": "c68f56596bacc158"
       }
     }
   }

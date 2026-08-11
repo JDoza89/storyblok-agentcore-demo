@@ -73,13 +73,31 @@
   "policyEngines": [
     {
       "name": "reInventDemoPolicyEngine",
-      "description": "Temporarily unrestricted while investigating a Cedar-related tool-discovery regression -- see storyblokAgentGateway README/TUTORIAL for history.",
+      "description": "Scopes the storyblokAgentGateway execution role to exactly the discovery tools and Storyblok operations currently in use (see agentcore/policies/*.cedar), with execute_destructive forbidden outright as a backstop.",
       "policies": [
         {
-          "name": "allowAll",
-          "description": "Allow any principal (any agent/harness role) to call any tool on this gateway",
-          "statement": "permit(\n  principal,\n  action,\n  resource == AgentCore::Gateway::\"arn:aws:bedrock-agentcore:us-east-1:485530831632:gateway/reinventdemo-reinventdemogateway-ianze4pdtu\"\n);",
+          "name": "denyExecuteDestructive",
+          "description": "Backstop: no principal may call execute_destructive on this gateway, regardless of what any other policy grants.",
+          "statement": "forbid(\n  principal,\n  action == AgentCore::Action::\"SBMCP___execute_destructive\",\n  resource == AgentCore::Gateway::\"arn:aws:bedrock-agentcore:us-east-1:485530831632:gateway/reinventdemo-reinventdemogateway-ianze4pdtu\"\n);",
           "validationMode": "IGNORE_ALL_FINDINGS",
+          "enforcementMode": "ACTIVE",
+          "authorizationPhase": "INITIATE"
+        },
+        {
+          "name": "allowDiscoveryTools",
+          "description": "search and describe -- metadata-only lookups, unconditional",
+          "statement": "// Metadata-only lookups against Storyblok's cached OpenAPI catalog.\n// These never touch real space data, so they're unconditional --\n// no operation-level restriction needed.\npermit (\n    principal,\n    action in [\n        AgentCore::Action::\"SBMCP___search\",\n        AgentCore::Action::\"SBMCP___describe\"\n    ],\n    resource == AgentCore::Gateway::\"arn:aws:bedrock-agentcore:us-east-1:485530831632:gateway/reinventdemo-reinventdemogateway-ianze4pdtu\"\n);",
+          "sourceFile": "agentcore/policies/allow-discovery-tools.cedar",
+          "validationMode": "FAIL_ON_ANY_FINDINGS",
+          "enforcementMode": "ACTIVE",
+          "authorizationPhase": "INITIATE"
+        },
+        {
+          "name": "allowScopedOperations",
+          "description": "Exactly the readonly/mutating Storyblok operations this agent currently uses",
+          "statement": "// Exactly the Storyblok operations this agent is currently allowed to run.\n//\n// To allow a new operation: add its exact name to the matching list\n// below (readonly or mutating) and redeploy -- nothing else in this\n// file needs to change.\n// To remove one: delete its line.\n//\n// This is intentionally the ONLY thing gating execute_readonly /\n// execute_mutating -- there is no other policy narrowing these two\n// actions, so an operation not listed here is denied by default.\npermit (\n    principal,\n    action in [\n        AgentCore::Action::\"SBMCP___execute_readonly\",\n        AgentCore::Action::\"SBMCP___execute_mutating\"\n    ],\n    resource == AgentCore::Gateway::\"arn:aws:bedrock-agentcore:us-east-1:485530831632:gateway/reinventdemo-reinventdemogateway-ianze4pdtu\"\n)\nwhen {\n    [\n        // -- readonly, via SBMCP___execute_readonly --\n        \"getStoryById\",\n        \"listStories\",\n        \"listAssetFolders\",\n        \"getComponent\",\n        \"listAssets\",\n\n        // -- mutating, via SBMCP___execute_mutating --\n        \"createStory\",\n        \"updateAsset\",\n        \"createWorkflowStageChange\"\n    ].contains(context.input.operation)\n};",
+          "sourceFile": "agentcore/policies/allow-scoped-operations.cedar",
+          "validationMode": "FAIL_ON_ANY_FINDINGS",
           "enforcementMode": "ACTIVE",
           "authorizationPhase": "INITIATE"
         }
