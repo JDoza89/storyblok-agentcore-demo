@@ -7,6 +7,8 @@ from storyblok_kit.model import load_model
 from storyblok_kit.skills import load_skill_instructions
 from storyblok_kit.credentials import resolve_storyblok_space_id
 from storyblok_kit.hooks.space_guard import SpaceIdGuard
+from storyblok_kit.tools.ai_branding import fetch_ai_branding_guidelines
+from storyblok_kit.tools.ai_translate import ai_translate_story
 from mcp_client.client import get_all_gateway_mcp_clients
 
 app = BedrockAgentCoreApp()
@@ -58,8 +60,10 @@ Follow the instructions below exactly.
 """
 
 
+# Unlike the scaffold's flat `tools = []` built once at import time, this is a
+# function called fresh per session -- see docstring for why that matters here.
 def _build_tools() -> list:
-    """Assemble this session's tools, including MCP clients.
+    """Assemble this session's tools: local @tool functions plus MCP clients.
 
     Called per-session (from get_or_create_agent), not at module import time --
     constructing the Gateway MCPClient at module load time (before any request/
@@ -67,21 +71,26 @@ def _build_tools() -> list:
     the model actually saw. Building it per-session, inside real request
     handling, avoids that.
 
-    Deliberately MCP-clients-only, no local (non-MCP) @tool functions mixed
-    in. Confirmed reproducible 3/3 with Cedar policies correctly in place
-    (ruling out an earlier, separate policy-wipe incident as the cause): any
-    local @tool sharing this Agent's tools list with the Gateway MCPClient
-    breaks discovery of the MCPClient's own tools. Traced through the Strands
-    SDK source (strands/tools/mcp/mcp_client.py, strands/tools/registry.py) --
-    MCPClient correctly implements ToolProvider, isn't misrouted by
-    isinstance checks, and calling its load_tools() directly in isolation
-    still returns the right tool set when nothing else shares the tools list.
-    ai_translate_story and fetch_ai_branding_guidelines are still needed for
-    the skill to fully work -- the real fix is exposing them as additional
-    Gateway targets (e.g. lambda-function-arn) so they're discovered through
-    this same MCPClient instead of as local tools, not adding them back here.
+    Local @tool functions (ai_translate_story, fetch_ai_branding_guidelines)
+    were previously believed to be fundamentally incompatible with sharing a
+    tools list with the Gateway MCPClient -- "confirmed reproducible 3/3" in
+    an earlier debugging pass, which led to moving them out to a Lambda-backed
+    "aiTools" Gateway target instead (see git history / TUTORIAL.md for that
+    detour). That conclusion didn't hold up: the actual causes were two
+    unrelated, since-fixed bugs present at the time of that debugging --
+    (1) the Strands MCPClient's own `prefix="reinventdemogateway"` kwarg
+    double-stacking with the Gateway's own `{target}___{tool}` naming into
+    unwieldy tool names that made the model avoid calling them, and (2) the
+    Gateway's own execution role missing `bedrock-agentcore:GetResourceApiKey`
+    on the correct workload-identity ARN (it was scoped to the target's name,
+    "SBMCP", when the real resource is scoped to the gateway's own id), which
+    made every Storyblok MCP tool call fail. With the prefix removed and that
+    IAM policy fixed, local tools and the Gateway MCPClient coexist in the
+    same list with no issues -- retested and confirmed. Mixing local tools
+    with a Gateway MCPClient is not unsupported; two specific, fixable bugs
+    were being misread as a structural incompatibility.
     """
-    tools = []
+    tools = [fetch_ai_branding_guidelines, ai_translate_story]
     for mcp_client in get_all_gateway_mcp_clients():
         if mcp_client:
             tools.append(mcp_client)

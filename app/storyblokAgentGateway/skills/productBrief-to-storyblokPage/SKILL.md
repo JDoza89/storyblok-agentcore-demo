@@ -114,6 +114,70 @@ Use these exact field names when building the `body` array — do not invent pla
 
 **`asset`/`multiasset` fields are full objects, never a bare `{"id": ...}`** — see the CRITICAL note under workflow step 3 for the exact shape and a real example. This applies to `hero.image`, `card.icon`, `gallery.images` (each array entry), and `productPage.og_image`.
 
+## Example: what a completed page looks like
+
+The brief below is not hypothetical — running this workflow against it produced a real, published `productPage`
+story in this space (`products/aurora-trail-2`). Trimmed to the shape that matters — most locales, blocks, and the
+`specTable` (covered separately above) omitted for brevity:
+
+```json
+{
+  "component": "productPage",
+  "body": [
+    {
+      "component": "hero",
+      "_uid": "hero_1",
+      "textAlignment": "left",
+      "backgroundColor": "light",
+      "imagePadding": false,
+      "image": {
+        "id": 206261088512839,
+        "filename": "https://a-us.storyblok.com/f/{{SPACE_ID}}/1920x683/b17642d674/hero.jpg",
+        "alt": "Yellow trail running shoes gripping wet, root-covered forest terrain on a steep climb through dense woods.",
+        "title": "", "copyright": "", "focus": "", "fieldtype": "asset"
+      },
+      "description": {
+        "type": "doc",
+        "content": [
+          {"type": "heading", "attrs": {"level": 1}, "content": [{"type": "text", "text": "Aurora Trail 2"}]},
+          {"type": "paragraph", "content": [
+            {"type": "text", "text": "A trail shoe that doesn't force a tradeoff between "},
+            {"type": "text", "text": "cushioning and stability", "marks": [{"type": "bold"}]},
+            {"type": "text", "text": ". Dual-density foam midsole keeps you cushioned on descents, stable on climbs."}
+          ]}
+        ]
+      },
+      "description__i18n__de": "-- same ProseMirror doc shape, German text -- one key per enabled locale, added by the localize workflow step",
+      "buttons": [
+        {
+          "component": "button", "_uid": "btn_waitlist", "text": "Join the waitlist", "color": "primary",
+          "link": {"linktype": "url", "url": "#signup"},
+          "text__i18n__de": "Jetzt vormerken lassen", "text__i18n__ja": "ウェイトリストに参加する"
+        }
+      ]
+    }
+  ],
+  "meta_title": "Aurora Trail 2 — cushioned on descents, stable on climbs",
+  "meta_description": "A trail shoe that doesn't force a tradeoff between cushioning and stability. Dual-density foam, recycled-mesh upper, 4mm lugs for wet rock and roots. Built for weekend trail runners.",
+  "og_image": {
+    "id": 206261088512839,
+    "filename": "https://a-us.storyblok.com/f/{{SPACE_ID}}/1920x683/b17642d674/hero.jpg",
+    "alt": "Yellow trail running shoes gripping wet, root-covered forest terrain on a steep climb through dense woods.",
+    "title": "", "copyright": "", "focus": "", "fieldtype": "asset"
+  }
+}
+```
+
+Three patterns worth noticing:
+
+- **A localized value sits right next to its default-language field, same name plus `__i18n__<lang>`** — never a
+  separate translated copy of the story. Only fields with actual translatable content get one; `_uid`, `component`,
+  `link`, and asset objects never do.
+- **Every asset is the full object** (`id`, `filename`, `alt`, `fieldtype`, ...), never a bare id — `hero.image`
+  above, and identically for `card.icon`, `gallery.images`, and `productPage.og_image`.
+- The real story's `body` had 5 blocks (`hero`, `cards`, `gallery`, `specTable`, `emailSignup`) — this example
+  keeps only the first to stay short. Use the component field reference above for the rest.
+
 ## On invocation
 
 The input to this skill is whatever the caller pasted in — it might be a real brief, a fragment, or something unrelated. Before doing anything else:

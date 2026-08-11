@@ -1,168 +1,154 @@
 # storyblokAgentGateway
 
-A Strands-based agent, deployed on Amazon Bedrock AgentCore, that turns a free-text product-launch brief into a
-Storyblok landing page. It never publishes directly — every page it touches lands in a **Reviewing** workflow
-stage for a human to approve.
+A Strands-based agent on Amazon Bedrock AgentCore that turns a product-launch brief into a Storyblok landing page.
+It never publishes directly — every page lands in a **Reviewing** workflow stage for human approval.
 
 This is the Gateway-connected variant: it reaches Storyblok's MCP server through an AgentCore Gateway target
-(IAM-signed, policy-enforceable) rather than connecting to it directly with a bare API key.
+(IAM-signed, policy-enforceable) instead of a bare API key.
 
 ## Related repos
 
-- **Frontend**: [re-invent-demo](https://github.com/JDoza89/re-invent-demo) — deployed on AWS Amplify. Renders
-  whatever this agent writes to Storyblok. Use it to see what a page actually looks like once the agent has drafted
-  it, either while it's still sitting in Reviewing (via Storyblok's Visual Editor preview) or after a human
-  publishes it.
+- **Frontend**: [re-invent-demo](https://github.com/JDoza89/re-invent-demo) on AWS Amplify — renders whatever this
+  agent writes to Storyblok, whether it's still in Reviewing or already published.
 
 ## What the agent does
 
-Given a product brief pasted into the prompt, it runs through a fixed workflow, described in full in
-`skills/productBrief-to-storyblokPage/SKILL.md`:
+Full workflow lives in `skills/productBrief-to-storyblokPage/SKILL.md`:
 
-1. **Parse the brief** — product name, launch date, target audience, benefits, target markets/locales, referenced
-   assets. Flags anything missing rather than inventing content to fill the gap.
-2. **Gather what it needs, in one read-only pass** — the live `productPage` component whitelist (never trusted
-   from memory), whether this product already has a page (making this run an update instead of a create), the
-   space's brand guidelines, and the real assets referenced in the brief (found via Storyblok's asset folders, not
-   guessed).
-3. **Write the page** — `createStory` for a new product, or a diffed `updateStory` for one that already exists,
-   using only components from the live whitelist.
-4. **Localize** — triggers Storyblok's AI-translate job per target market and confirms it actually completed
-   before moving on.
-5. **Generate metadata** — alt text per image, SEO title/description per locale.
-6. **Move to review** — `createWorkflowStageChange` into the Reviewing stage.
-7. **Stop** — summarizes what was built or changed, which locales completed, and any gaps, for the human who
-   reviews next.
+1. **Parse the brief** — product, launch date, audience, benefits, markets, assets. Flags missing fields instead
+   of inventing them.
+2. **Gather what it needs** — live `productPage` component whitelist, whether a page already exists, brand
+   guidelines, real assets.
+3. **Write the page** — `createStory`, or a diffed `updateStory` for an existing one, using only whitelisted
+   components.
+4. **Localize** — Storyblok's AI-translate job per market, confirmed complete before moving on.
+5. **Generate metadata** — alt text, SEO title/description per locale.
+6. **Move to review** — `createWorkflowStageChange` into Reviewing.
+7. **Stop** — summarizes what changed, which locales completed, and any gaps, for the human reviewer.
 
 ## The human review loop
 
-The agent's Storyblok credential has no publish rights, and nothing in this codebase ever calls a publish
-operation — that's enforced by what the agent is allowed to do, not just by instruction. Once a story lands in
-Reviewing:
+The agent's credential has no publish rights — enforced, not just instructed. Once a story is in Reviewing:
 
-1. A human opens the story in Storyblok's Visual Editor (or previews it on the [frontend](https://github.com/JDoza89/re-invent-demo)) and reviews what the agent drafted.
-2. They edit directly in the Visual Editor if anything needs a human touch — copy, image choices, spec data the
-   agent flagged as missing.
-3. Only a human moves the story out of Reviewing and publishes it. The workflow stage is the actual gate: a story
-   sitting in Reviewing is not live no matter what the agent does next.
+1. A human reviews it in Storyblok's Visual Editor (or the [frontend](https://github.com/JDoza89/re-invent-demo)).
+2. They edit directly if anything needs a human touch.
+3. Only a human publishes. Reviewing is not live no matter what the agent does next.
 
 ## Governance: the `productPage` content type
 
-Pages this agent creates or updates are always a dedicated `productPage` content type, not the generic `page`
-type used elsewhere in the space. `productPage`'s `body` field is configured in Storyblok with
-`restrict_components: true` and an explicit `component_whitelist` — Storyblok's Management API rejects any
-component outside that list, so this isn't a convention the agent has to police itself.
+Pages are always the `productPage` content type, not the generic `page` type. Its `body` field has
+`restrict_components: true` and an explicit whitelist — Storyblok's API rejects anything outside it.
 
-That whitelist is also where non-engineering governance actually happens: whoever owns the Storyblok content model
-can add or remove allowed components (say, approve a new `testimonial` block for product pages) directly in
-Storyblok's schema, with no code or prompt change on the agent's side. The agent fetches this whitelist fresh at
-the start of every run rather than trusting a copy from a previous run — see step 2 above — so a content-model
-change takes effect on the very next invocation.
+That whitelist is also where non-engineering governance happens: whoever owns the content model adds or removes
+allowed components directly in Storyblok, no code change needed. The agent fetches it fresh every run (step 2
+above), so a content-model change takes effect on the next invocation.
 
 ## Architecture
 
-- **Runtime**: Amazon Bedrock AgentCore Runtime, a Strands `Agent` behind `BedrockAgentCoreApp`'s
-  `@app.entrypoint`. Model is native Bedrock Claude (`storyblok_kit/model.py`) — the execution role's own IAM
-  credentials authenticate the model call, no separate API key.
-- **Storyblok access**: an AgentCore Gateway target proxies MCP calls to Storyblok's hosted MCP server
-  (`mcp.labs.storyblok.com`), authenticated with AWS_IAM/SigV4 rather than a bare token, with AgentCore's Cedar
-  policy engine attached for tool-call authorization.
-- **Credentials**: the Storyblok PAT and the single Storyblok space id this agent is allowed to touch are both
-  registered as `ApiKeyCredentialProvider`s in AgentCore Identity (`storyblok-mcp-pat`, `storyblok-space-id`) —
-  never hardcoded. `storyblok_kit/credentials.py` resolves them per-request (an env var override for local dev,
-  a workload-identity-token exchange when deployed). Pointing a different deployment at a different space or PAT
-  needs zero code changes, just its own credential providers under those same names.
-- **Guardrail**: `storyblok_kit/hooks/space_guard.py` registers a Strands `BeforeToolCallEvent` hook that blocks
-  any tool call whose `space_id` doesn't match the resolved value above — a real, code-level restriction, not just
-  a prompt instruction, which matters because the Storyblok credential itself isn't scoped to one space.
-- **Instructions**: the actual workflow logic lives in two S3-hosted Skills (`SKILL.md` files), fetched at request
-  time and folded into the system prompt, with a `{{SPACE_ID}}` placeholder filled in from the resolved credential
-  above — see `skills/` below.
-- **Infra**: provisioned via the `agentcore` CLI and its generated CDK stack (`agentcore/cdk/`) — the runtime, its
-  execution role, the Gateway, the policy engine, and the credential providers all come from one `agentcore deploy`.
+- **Runtime**: AgentCore Runtime, a Strands `Agent` behind `BedrockAgentCoreApp`. Model is native Bedrock Claude
+  (`storyblok_kit/model.py`) — the execution role's own IAM credentials authenticate the call, no separate API key.
+- **Storyblok access**: an AgentCore Gateway target proxies MCP calls to Storyblok's hosted MCP server, signed
+  with AWS_IAM/SigV4, with AgentCore's Cedar policy engine attached for tool-call authorization.
+- **AI tools** (`ai_translate_story`, `fetch_ai_branding_guidelines`): local Strands `@tool` functions in
+  `storyblok_kit/tools/`, calling Storyblok's Management API directly since neither has an MCP equivalent — see
+  "Local tools and the Gateway MCPClient" below.
+- **Credentials**: the Storyblok PAT and space id are `ApiKeyCredentialProvider`s in AgentCore Identity, never
+  hardcoded. `storyblok_kit/credentials.py` resolves them per-request. Pointing a new deployment at a different
+  space/PAT needs zero code changes — just its own credential providers under the same names.
+- **Guardrail**: `storyblok_kit/hooks/space_guard.py` blocks any tool call whose `space_id` doesn't match — a
+  code-level restriction, not just a prompt instruction.
+- **Instructions**: workflow logic lives in two S3-hosted Skills, fetched per request and folded into the system
+  prompt with `{{SPACE_ID}}` filled in — see `skills/` below.
+- **Infra**: provisioned via the `agentcore` CLI and its generated CDK stack (`agentcore/cdk/`) — one
+  `agentcore deploy` for the runtime, Gateway, policy engine, and credential providers.
 
-For the full build walkthrough, including the real AWS-side issues hit along the way (a Gateway bug, IAM
-permission gaps, PAT-scoping limitations, a Bedrock quota wall) and what the underlying harness (Strands +
-AgentCore) gives you for free versus what had to be hand-built, see `TUTORIAL.md` at the project root.
+## Local tools and the Gateway MCPClient
+
+`ai_translate_story` and `fetch_ai_branding_guidelines` call Storyblok's Management API directly, as local Strands
+`@tool` functions sitting alongside the Gateway `MCPClient` in `_build_tools()` — neither has a Storyblok MCP
+equivalent.
+
+This combination was once believed to break tool discovery outright. It didn't — two unrelated, since-fixed bugs
+were the real cause:
+
+- **Redundant tool-name prefix.** `MCPClient(..., prefix="reinventdemogateway")` stacked on the Gateway's own
+  `{target}___{tool}` naming produced unwieldy names (`reinventdemogateway_SBMCP___execute_mutating`), which made
+  the model narrate fake results instead of actually calling tools. Fixed by dropping the `prefix` kwarg.
+- **Wrong IAM resource ARN.** The Gateway role's policy scoped `GetResourceApiKey` to a workload identity named
+  after the *target* (`SBMCP`) instead of the *gateway's own id* — the one AWS actually checks. Every tool call
+  failed with a generic error until this was fixed (see step 4).
+
+Local tools and the Gateway `MCPClient` coexist fine now — confirmed by retest.
+
+For the full build walkthrough, including the real AWS-side issues hit along the way and what the underlying
+harness (Strands + AgentCore) gives you for free versus what had to be hand-built, see `TUTORIAL.md` at the
+project root.
 
 ## Reusability
 
-- `storyblok_kit/` has tools that the Storyblok MCP is currently lacking. It is structured so that it
-  _could_ become its own repo of reusable Storyblok-agent building blocks (credential resolution, the space-id
-  guardrail, a skill fetcher) that any Strands agent adds as a dependency, rather than living inside this one app.
-- `skills/` in this repo is **not** what the deployed agent actually reads from — the real source of truth is the
-  S3 bucket referenced in `main.py`'s `SKILL_S3_URIS`. This folder exists purely so the instruction content is
-  visible and version-controlled in git; if you edit a skill, push the change to S3 (and clear the local skill
-  cache) for it to actually take effect. Think of it as a mirror for review, not a live config.
+- `storyblok_kit/` holds tools (`tools/ai_translate.py`, `tools/ai_branding.py`) for capabilities the Storyblok
+  MCP lacks. Structured so it _could_ become its own reusable package of Storyblok-agent building blocks
+  (credential resolution, the space-id guardrail, a skill fetcher, these tools).
+- `skills/` in this repo is **not** what the deployed agent reads from — the real source of truth is the S3 bucket
+  in `main.py`'s `SKILL_S3_URIS`. Edit here for visibility/version control, then push to S3 for it to take effect.
 
 ## Environment Variables
 
-variable/provider **names**:
-
 | Variable                                    | Required              | Description                                                           |
-| ------------------------------------------- | --------------------- | --------------------------------------------------------------------- |
-| `LOCAL_DEV`                                 | No                    | Set to `1` to use `.env.local` instead of AgentCore Identity          |
-| `AGENTCORE_CREDENTIAL_STORYBLOK_SPACE_ID`   | Local dev only        | Overrides the `storyblok-space-id` credential provider for local runs |
-| `AGENTCORE_GATEWAY_REINVENTDEMOGATEWAY_URL` | Yes (injected by CDK) | The Gateway's MCP endpoint                                            |
-| `AWS_REGION`                                | Yes                   | Region for AgentCore Identity/Bedrock calls                           |
+| -------------------------------------------- | --------------------- | --------------------------------------------------------------------- |
+| `LOCAL_DEV`                                  | No                    | Set to `1` to use `.env.local` instead of AgentCore Identity          |
+| `AGENTCORE_CREDENTIAL_STORYBLOK_SPACE_ID`    | Local dev only        | Overrides the `storyblok-space-id` credential provider for local runs |
+| `AGENTCORE_GATEWAY_REINVENTDEMOGATEWAY_URL`  | Yes (injected by CDK) | The Gateway's MCP endpoint                                            |
+| `AWS_REGION`                                 | Yes                   | Region for AgentCore Identity/Bedrock calls                           |
 
-When deployed, the space id and the Storyblok PAT are resolved from AgentCore Identity's credential providers
-(`storyblok-space-id`, `storyblok-mcp-pat`) — see `storyblok_kit/credentials.py`. Nothing in this repo should ever
-contain an actual PAT value or space id credential; if you find one, treat it as a bug and rotate the credential.
+When deployed, the space id and PAT resolve from AgentCore Identity's credential providers (`storyblok-space-id`,
+`storyblok-mcp-pat`) — see `storyblok_kit/credentials.py`. Nothing in this repo should ever contain an actual PAT
+or space id; treat one as a bug and rotate the credential if you find it.
 
 ## Layout
 
-The generated application code lives at the agent root directory. At the root, there is a `.gitignore` file, an
-`agentcore/` folder which represents the configurations and state associated with this project. Other `agentcore`
-commands like `deploy`, `dev`, and `invoke` rely on the configuration stored here.
+Application code lives at the agent root. `agentcore/` holds the configuration and state that `deploy`, `dev`,
+and `invoke` all rely on.
 
 ### Input Validation
 
-Validate invocation input before forwarding it to Strands. Keep plain prompts typed as strings. If the app accepts a
-caller-supplied message history, retain `strip_trailing_tool_use()`, which normalizes the history tail before
-invoking the agent.
+Validate invocation input before forwarding it to Strands. Keep plain prompts typed as strings. If the app accepts
+caller-supplied message history, retain `strip_trailing_tool_use()`, which normalizes the history tail first.
 
 ## Developing locally
 
-### 1. Install the CLI and the CDK project's dependencies
+Install the tools, create a Gateway, connect it to Storyblok, lock down its permissions, then run it.
+
+### 1. Install the tools
 
 ```bash
-npm install -g @aws/agentcore          # the agentcore CLI (this project was built against 0.26.0)
-cd agentcore/cdk && npm install        # pulls in @aws/agentcore-cdk, aws-cdk-lib, constructs -- what `agentcore deploy` actually runs
+npm install -g @aws/agentcore          # built against 0.26.0
+cd agentcore/cdk && npm install        # what `agentcore deploy` runs under the hood
 ```
 
-You'll also need AWS credentials configured (`aws configure` / SSO) with permissions for Bedrock AgentCore, and
-Python 3.14 + [`uv`](https://github.com/astral-sh/uv) for the agent app itself.
+Also needs AWS credentials configured (`aws configure` / SSO) and Python 3.14 + [`uv`](https://github.com/astral-sh/uv).
 
 ### 2. Create the Gateway
-
-From the project root:
 
 ```bash
 agentcore add gateway --name reInventDemoGateway --authorizer-type AWS_IAM
 ```
 
-This part works fine through the CLI.
+The agent calls this Gateway instead of Storyblok directly, so permissions are controlled in one place. Works
+fine through the CLI as-is.
 
-### 3. Create the Gateway target -- via the AWS CLI, not `agentcore add gateway-target`
+### 3. Connect the Gateway to Storyblok
 
-`agentcore add gateway-target --type mcp-server --outbound-auth api-key ...` does not complete correctly for this
-target type/auth combination. It leaves behind a broken, "unassigned" entry in `agentcore.json` -- a placeholder
-tool definition and `outboundAuth: {"type": "NONE"}` instead of the real API-key config, never actually attached to
-the gateway. If you look in `agentcore.json` and see an `unassignedTargets` entry that looks like that, this is why.
-
-The workaround is to create the target directly against the AgentCore control plane, then have `agentcore` import
-the result rather than create it:
+`agentcore add gateway-target` is broken for this combination (MCP-server target + API-key auth) — it leaves a
+broken, half-created entry in `agentcore.json`'s `unassignedTargets`. Workaround: create the target directly, then
+import it.
 
 ```bash
-# 1. Create both credential providers (if you haven't already) -- the PAT the target
-#    uses as outbound auth to Storyblok, and the space id storyblok_kit/credentials.py
-#    and SpaceIdGuard resolve at runtime. Both are real AWS-managed credentials, never
-#    hardcoded anywhere in this repo.
+# Store the Storyblok token and space id as credentials AgentCore manages -- never hardcoded here.
 agentcore add credential --name storyblok-mcp-pat --type api-key --api-key <your-storyblok-pat>
 agentcore add credential --name storyblok-space-id --type api-key --api-key <your-storyblok-space-id>
 
-# 2. Create the actual gateway target with the real AWS CLI, bypassing `agentcore add gateway-target`
+# Create the target directly, bypassing the broken CLI command
 aws bedrock-agentcore-control create-gateway-target \
   --gateway-identifier <your-gateway-id> \
   --name SBMCP \
@@ -180,14 +166,14 @@ aws bedrock-agentcore-control create-gateway-target \
   }]' \
   --region us-east-1
 
-# 3. Bring it under agentcore's own tracking so agentcore.json/CDK know it exists
+# Bring it under agentcore's tracking
 agentcore import gateway --arn arn:aws:bedrock-agentcore:<region>:<account-id>:gateway/<your-gateway-id>
 ```
 
-Then delete the stale `unassignedTargets` entry from `agentcore.json` if the earlier failed attempt left one there.
+Delete any stale `unassignedTargets` entry a failed attempt left behind.
 
-Storyblok's MCP server is session-stateful, so also make sure the target's `metadataConfiguration` passes through
-the session header, or every `tools/call` after the first will fail with "Server not initialized":
+Storyblok's MCP server is session-stateful — without passing the session header through, every call after the
+first fails with "Server not initialized":
 
 ```bash
 aws bedrock-agentcore-control update-gateway-target \
@@ -196,40 +182,85 @@ aws bedrock-agentcore-control update-gateway-target \
   --region us-east-1
 ```
 
-### 4. Update your Gateway IAM role's permission policy
+### 4. Let the Gateway read the credentials
 
-Creating the Gateway in step 2 auto-creates its own IAM role -- a separate role from the agent runtime's execution
-role. By default it has no permission to read anything from the token vault, which fails silently as a generic
-error at `tools/call` time with no useful message (this was the root cause behind the Gateway invocation bug
-encountered while building this).
+The Gateway's IAM role (separate from the agent's own) can't read the credential store by default — fails on the
+first tool call with a generic "An internal error occurred" ([turn on debug mode](#5-run-it-locally) to see the
+real error underneath).
 
-Find that role's `storyblok-gateway-credential-access` inline policy (or create one with this name if it doesn't
-exist yet) and add this to its `Resource` list, replacing `<region>`/`<account-id>` with your own:
+Set that role's `storyblok-gateway-credential-access` policy to this in full, filling in your own region/account id:
 
 ```json
-"Resource": [
-    "arn:aws:bedrock-agentcore:<region>:<account-id>:token-vault/default",
-    "arn:aws:bedrock-agentcore:<region>:<account-id>:workload-identity-directory/default",
-    "arn:aws:bedrock-agentcore:<region>:<account-id>:token-vault/default/apikeycredentialprovider/storyblok-mcp-pat",
-    "arn:aws:bedrock-agentcore:<region>:<account-id>:workload-identity-directory/default/workload-identity/<gateway>"
-]
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AgentCoreGatewayApiKeyTokenVaultDefault",
+      "Effect": "Allow",
+      "Action": "bedrock-agentcore:GetResourceApiKey",
+      "Resource": [
+        "arn:aws:bedrock-agentcore:<region>:<account-id>:token-vault/default",
+        "arn:aws:bedrock-agentcore:<region>:<account-id>:workload-identity-directory/default",
+        "arn:aws:bedrock-agentcore:<region>:<account-id>:token-vault/default/apikeycredentialprovider/storyblok-mcp-pat",
+        "arn:aws:bedrock-agentcore:<region>:<account-id>:workload-identity-directory/default/workload-identity/<your-gateway-id>"
+      ]
+    },
+    {
+      "Sid": "AgentCoreGatewayApiKeyTokenVaultPerKey",
+      "Effect": "Allow",
+      "Action": "bedrock-agentcore:GetResourceApiKey",
+      "Resource": "arn:aws:bedrock-agentcore:<region>:<account-id>:token-vault/default/apikeycredentialprovider/storyblok-mcp-pat"
+    },
+    {
+      "Sid": "AgentCoreGatewaySecrets",
+      "Effect": "Allow",
+      "Action": "secretsmanager:GetSecretValue",
+      "Resource": "arn:aws:secretsmanager:<region>:<account-id>:secret:bedrock-agentcore-identity!default/apikey/storyblok-mcp-pat-*"
+    },
+    {
+      "Sid": "AgentCoreGatewayWorkloadIdentity",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock-agentcore:GetWorkloadAccessToken",
+        "bedrock-agentcore:GetWorkloadAccessTokenForUserId",
+        "bedrock-agentcore:CompleteResourceTokenAuth"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
 ```
 
-`SBMCP` in the last entry is the target's own name (from step 3 above) -- Gateway resolves a workload identity
-scoped to that name when fetching the target's credential, so this has to match whatever you named your target.
+**Critical:** that last `workload-identity/<your-gateway-id>` resource must be the gateway's own id (e.g.
+`reinventdemo-reinventdemogateway-ianze4pdtu`), **not** the target's name (e.g. `SBMCP`) — an easy mistake that
+produces the exact same generic error as a missing policy, and only debug mode (step 5) will reveal it.
 
 ### 5. Run it locally
 
-`agentcore dev` will start a local server on 0.0.0.0:8080 -- it runs against this app's `.venv` directly, so you
-don't need to `source .venv/bin/activate` first. Activating it yourself is only useful if you want to run Python
-directly (`python main.py`) or point editor tooling at the right interpreter.
+```bash
+agentcore dev
+```
 
-In a new terminal, you can invoke that server with:
+Starts a local server on `0.0.0.0:8080`, running inside this app's `.venv` already.
 
-`agentcore invoke --dev "What can you do"`
+```bash
+agentcore invoke --dev "What can you do"
+```
+
+If any Gateway call fails with a generic "An internal error occurred. Please retry later.", turn on
+[debug mode](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/gateway-debug-messages.html) to see the
+real error underneath:
+
+```bash
+aws bedrock-agentcore-control update-gateway --gateway-identifier <your-gateway-id> \
+  --name <your-gateway-name> --role-arn <your-gateway-role-arn> --authorizer-type AWS_IAM \
+  --protocol-configuration '{"mcp":{"supportedVersions":["2025-03-26","2025-06-18","2025-11-25"]}}' \
+  --exception-level DEBUG
+```
+
+Turn it back off (omit `--exception-level`) once you're done — a real error message is exactly what you don't
+want a production caller to see.
 
 ## Deployment
 
-After providing credentials, `agentcore deploy` will deploy your project into Amazon Bedrock AgentCore.
-
-Use `agentcore invoke` to invoke your deployed agent.
+`agentcore deploy` deploys the project into Amazon Bedrock AgentCore. `agentcore invoke` invokes it.

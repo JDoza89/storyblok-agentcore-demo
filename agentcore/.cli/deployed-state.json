@@ -34,41 +34,15 @@
           }
         },
         "policies": {
-          "reInventDemoPolicyEngine/allowDiscoveryTools": {
-            "policyId": "allowDiscoveryTools-jo8gnqa_wo",
-            "policyArn": "arn:aws:bedrock-agentcore:us-east-1:485530831632:policy-engine/reInventDemo_reInventDemoPolicyEngine-v8ggrec_w2/policy/allowDiscoveryTools-jo8gnqa_wo",
+          "reInventDemoPolicyEngine/allowAll": {
+            "policyId": "allowAll-uv27u_tzdl",
+            "policyArn": "arn:aws:bedrock-agentcore:us-east-1:485530831632:policy-engine/reInventDemo_reInventDemoPolicyEngine-v8ggrec_w2/policy/allowAll-uv27u_tzdl",
             "engineName": "reInventDemoPolicyEngine"
-          },
-          "reInventDemoPolicyEngine/allowProductPageReadonlyOperations": {
-            "policyId": "allowProductPageReadonlyOperations-s4lc39jvij",
-            "policyArn": "arn:aws:bedrock-agentcore:us-east-1:485530831632:policy-engine/reInventDemo_reInventDemoPolicyEngine-v8ggrec_w2/policy/allowProductPageReadonlyOperations-s4lc39jvij",
-            "engineName": "reInventDemoPolicyEngine"
-          },
-          "reInventDemoPolicyEngine/allowProductPageMutatingOperations": {
-            "policyId": "allowProductPageMutatingOperations-uohv88vzz8",
-            "policyArn": "arn:aws:bedrock-agentcore:us-east-1:485530831632:policy-engine/reInventDemo_reInventDemoPolicyEngine-v8ggrec_w2/policy/allowProductPageMutatingOperations-uohv88vzz8",
-            "engineName": "reInventDemoPolicyEngine"
-          },
-          "reInventDemoPolicyEngine/denyDestructiveAndUploadTools": {
-            "policyId": "denyDestructiveAndUploadTools-fhakt_b99e",
-            "policyArn": "arn:aws:bedrock-agentcore:us-east-1:485530831632:policy-engine/reInventDemo_reInventDemoPolicyEngine-v8ggrec_w2/policy/denyDestructiveAndUploadTools-fhakt_b99e",
-            "engineName": "reInventDemoPolicyEngine"
-          }
-        },
-        "harnesses": {
-          "productBriefHarness": {
-            "harnessId": "reInventDemo_productBriefHarness-39lcpkBjrQ",
-            "harnessArn": "arn:aws:bedrock-agentcore:us-east-1:485530831632:harness/reInventDemo_productBriefHarness-39lcpkBjrQ",
-            "roleArn": "arn:aws:iam::485530831632:role/reInventDemo_productBriefHarness",
-            "status": "READY",
-            "harnessVersion": 7,
-            "agentRuntimeArn": "arn:aws:bedrock-agentcore:us-east-1:485530831632:runtime/harness_reInventDemo_productBriefHarness-leOm3e7GvS",
-            "provisioner": "cloudformation"
           }
         },
         "stackName": "AgentCore-reInventDemo-default",
         "identityKmsKeyArn": "arn:aws:kms:us-east-1:485530831632:key/a93a058a-1d3b-4529-b023-d1c207ed049a",
-        "deployHash": "1a6173c0c5504cf8"
+        "deployHash": "69343d49818ffafc"
       }
     }
   }

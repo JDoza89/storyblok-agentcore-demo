@@ -13,7 +13,7 @@ def get_reinventdemogateway_mcp_client() -> MCPClient | None:
     if not url:
         logger.warning("AGENTCORE_GATEWAY_REINVENTDEMOGATEWAY_URL not set — reInventDemoGateway gateway tools unavailable")
         return None
-    return MCPClient(lambda: aws_iam_streamablehttp_client(url, aws_service="bedrock-agentcore", aws_region=os.environ.get("AWS_REGION", os.environ.get("AWS_DEFAULT_REGION"))), prefix="reinventdemogateway")
+    return MCPClient(lambda: aws_iam_streamablehttp_client(url, aws_service="bedrock-agentcore", aws_region=os.environ.get("AWS_REGION", os.environ.get("AWS_DEFAULT_REGION"))))
 
 def get_all_gateway_mcp_clients() -> list[MCPClient]:
     """Returns MCP clients for all configured gateways."""

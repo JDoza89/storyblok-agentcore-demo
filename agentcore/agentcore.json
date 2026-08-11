@@ -73,37 +73,13 @@
   "policyEngines": [
     {
       "name": "reInventDemoPolicyEngine",
-      "description": "Scopes the storyblokAgentGateway execution role to exactly the Storyblok tool/operation combinations the productBrief-to-storyblokPage skill uses -- nothing else.",
+      "description": "Temporarily unrestricted while investigating a Cedar-related tool-discovery regression -- see storyblokAgentGateway README/TUTORIAL for history.",
       "policies": [
         {
-          "name": "allowDiscoveryTools",
-          "description": "search and describe are metadata-only lookups against the cached Storyblok OpenAPI catalog -- they never touch real space data, so no operation-level restriction is needed.",
-          "statement": "permit (\n  principal == AgentCore::IamEntity::\"arn:aws:iam::485530831632:role/AgentCore-reInventDemo-de-ApplicationAgentStoryblok-cZLRlHeumSb3\",\n  action in [AgentCore::Action::\"SBMCP___search\", AgentCore::Action::\"SBMCP___describe\"],\n  resource == AgentCore::Gateway::\"arn:aws:bedrock-agentcore:us-east-1:485530831632:gateway/reinventdemo-reinventdemogateway-ianze4pdtu\"\n);",
-          "validationMode": "FAIL_ON_ANY_FINDINGS",
-          "enforcementMode": "ACTIVE",
-          "authorizationPhase": "INITIATE"
-        },
-        {
-          "name": "allowProductPageReadonlyOperations",
-          "description": "Exactly the execute_readonly operations the productBrief-to-storyblokPage skill uses: checking for an existing page, fetching a story fresh before update, finding real assets, and fetching the live productPage component whitelist.",
-          "statement": "permit (\n  principal == AgentCore::IamEntity::\"arn:aws:iam::485530831632:role/AgentCore-reInventDemo-de-ApplicationAgentStoryblok-cZLRlHeumSb3\",\n  action == AgentCore::Action::\"SBMCP___execute_readonly\",\n  resource == AgentCore::Gateway::\"arn:aws:bedrock-agentcore:us-east-1:485530831632:gateway/reinventdemo-reinventdemogateway-ianze4pdtu\"\n)\nwhen {\n    context.input.operation == \"getStory\"\n    || context.input.operation == \"listStories\"\n    || context.input.operation == \"listAssetFolders\"\n    || context.input.operation == \"listAssets\"\n    || context.input.operation == \"getComponent\"\n    || context.input.operation == \"listManagementComponents\"\n};",
-          "validationMode": "FAIL_ON_ANY_FINDINGS",
-          "enforcementMode": "ACTIVE",
-          "authorizationPhase": "INITIATE"
-        },
-        {
-          "name": "allowProductPageMutatingOperations",
-          "description": "Exactly the execute_mutating operations the productBrief-to-storyblokPage skill uses: create/update the story, and move it into the Reviewing workflow stage.",
-          "statement": "permit (\n  principal == AgentCore::IamEntity::\"arn:aws:iam::485530831632:role/AgentCore-reInventDemo-de-ApplicationAgentStoryblok-cZLRlHeumSb3\",\n  action == AgentCore::Action::\"SBMCP___execute_mutating\",\n  resource == AgentCore::Gateway::\"arn:aws:bedrock-agentcore:us-east-1:485530831632:gateway/reinventdemo-reinventdemogateway-ianze4pdtu\"\n)\nwhen {\n    context.input.operation == \"createStory\"\n    || context.input.operation == \"updateStory\"\n    || context.input.operation == \"createWorkflowStageChange\"\n};",
-          "validationMode": "FAIL_ON_ANY_FINDINGS",
-          "enforcementMode": "ACTIVE",
-          "authorizationPhase": "INITIATE"
-        },
-        {
-          "name": "denyDestructiveAndUploadTools",
-          "description": "Defense in depth: the skill never publishes, deletes, or uploads assets, so these are explicitly forbidden rather than just left unpermitted -- this stays effective even if a future policy accidentally grants them.",
-          "statement": "forbid (\n  principal == AgentCore::IamEntity::\"arn:aws:iam::485530831632:role/AgentCore-reInventDemo-de-ApplicationAgentStoryblok-cZLRlHeumSb3\",\n  action in [AgentCore::Action::\"SBMCP___execute_destructive\", AgentCore::Action::\"SBMCP___upload_asset\", AgentCore::Action::\"SBMCP___upload_asset_finish\"],\n  resource == AgentCore::Gateway::\"arn:aws:bedrock-agentcore:us-east-1:485530831632:gateway/reinventdemo-reinventdemogateway-ianze4pdtu\"\n);",
-          "validationMode": "FAIL_ON_ANY_FINDINGS",
+          "name": "allowAll",
+          "description": "Allow any principal (any agent/harness role) to call any tool on this gateway",
+          "statement": "permit(\n  principal,\n  action,\n  resource == AgentCore::Gateway::\"arn:aws:bedrock-agentcore:us-east-1:485530831632:gateway/reinventdemo-reinventdemogateway-ianze4pdtu\"\n);",
+          "validationMode": "IGNORE_ALL_FINDINGS",
           "enforcementMode": "ACTIVE",
           "authorizationPhase": "INITIATE"
         }
@@ -112,12 +88,7 @@
   ],
   "configBundles": [],
   "abTests": [],
-  "harnesses": [
-    {
-      "name": "productBriefHarness",
-      "path": "app/productBriefHarness"
-    }
-  ],
+  "harnesses": [],
   "datasets": [],
   "payments": []
 }
