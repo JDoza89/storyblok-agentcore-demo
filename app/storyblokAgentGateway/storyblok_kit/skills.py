@@ -1,4 +1,4 @@
-"""Skill fetcher — downloads s3/git skills to local filesystem on first use.
+"""Skill fetcher — downloads s3 skills to local filesystem on first use.
 
 Resolved paths are passed to AgentSkills(skills=...) in main.py.
 Cache directory: <tmpdir>/.agents/skills/ — an absolute path under the system temp
@@ -7,21 +7,15 @@ directory (honors $TMPDIR, defaults to /tmp). The runtime working directory (e.g
 guaranteed-writable.
 """
 
-import base64
 import hashlib
 import json
-import logging
 import os
 import shutil
-import subprocess
 import tempfile
 from pathlib import Path
 from typing import Optional
 
-logger = logging.getLogger(__name__)
-
 _SKILLS_BASE = Path(tempfile.gettempdir()) / ".agents" / "skills"
-_GIT_TIMEOUT = 60
 _S3_MAX_SIZE_BYTES = 1 * 1024 * 1024 * 1024  # 1 GB
 
 
@@ -145,99 +139,6 @@ def _fetch_s3_skill(source: str, s3_client=None) -> Path:
     return _rename_and_cache_skill(type_dir, temp_dir, source_hash, temp_dir, source_label=uri)
 
 
-def _resolve_credential_arn(credential_arn: str, identity_client) -> str:
-    """Resolve a Token Vault API-key credential ARN to its secret value via AgentCore Identity.
-
-    ARN format: arn:<p>:bedrock-agentcore:<region>:<account>:token-vault/<vault>/apikeycredentialprovider/<name>
-    """
-    from bedrock_agentcore.runtime.context import BedrockAgentCoreContext  # noqa: PLC0415
-
-    provider_name = credential_arn.rsplit("/", 1)[-1]
-    if not provider_name:
-        raise ValueError(f"Invalid credential ARN: {credential_arn}")
-    workload_token = BedrockAgentCoreContext.get_workload_access_token()
-    if not workload_token:
-        raise ValueError("Credential ARN resolution requires a workload access token")
-    api_key = identity_client.dp_client.get_resource_api_key(
-        resourceCredentialProviderName=provider_name,
-        workloadIdentityToken=workload_token,
-    )["apiKey"]
-    if not api_key:
-        raise ValueError(f"Identity returned empty API key for provider: {provider_name}")
-    return api_key
-
-
-def _build_git_auth_env(credential_arn: Optional[str], username: Optional[str], identity_client=None) -> dict:
-    """Build GIT_CONFIG_* env vars for HTTP Basic auth using a Token Vault credential ARN.
-
-    Uses env vars instead of -c args to avoid leaking credentials in /proc/*/cmdline,
-    and so auth propagates to sub-commands (e.g. sparse-checkout triggering a fetch).
-    """
-    if not credential_arn or not identity_client:
-        return {}
-    password = _resolve_credential_arn(credential_arn, identity_client)
-    user = username or "oauth2"
-    encoded = base64.b64encode(f"{user}:{password}".encode()).decode()
-    return {
-        "GIT_CONFIG_COUNT": "1",
-        "GIT_CONFIG_KEY_0": "http.extraHeader",
-        "GIT_CONFIG_VALUE_0": f"Authorization: Basic {encoded}",
-    }
-
-
-def _fetch_git_skill(url: str, skill_path: str = "", credential_arn: Optional[str] = None,
-                     username: Optional[str] = None, identity_client=None) -> Path:
-    """Shallow-clone a git skill repository and return the local skill directory.
-
-    Returns the directory containing SKILL.md (the subdir itself for sparse checkouts).
-    """
-    if skill_path and (os.path.isabs(skill_path) or ".." in Path(skill_path).parts):
-        raise ValueError(f"Path traversal detected in skill path: {skill_path}")
-
-    source_hash = _stable_hash(f"{url}:{skill_path}")
-    type_dir = _SKILLS_BASE / "git"
-
-    cached = _resolve_cached(type_dir, source_hash)
-    if cached:
-        return Path(cached) / skill_path if skill_path else Path(cached)
-
-    temp_dir = type_dir / source_hash
-    _cleanup(temp_dir)
-    temp_dir.mkdir(parents=True, exist_ok=True)
-
-    extra_env = _build_git_auth_env(credential_arn, username, identity_client)
-    git_env = {**os.environ, **extra_env} if extra_env else None
-
-    try:
-        if skill_path:
-            subprocess.run(
-                ["git", "clone", "--depth", "1", "--filter=blob:none", "--sparse", url, str(temp_dir)],
-                check=True, timeout=_GIT_TIMEOUT, capture_output=True, env=git_env,
-            )
-            subprocess.run(
-                ["git", "sparse-checkout", "set", skill_path],
-                check=True, timeout=_GIT_TIMEOUT, capture_output=True, cwd=str(temp_dir), env=git_env,
-            )
-        else:
-            subprocess.run(
-                ["git", "clone", "--depth", "1", url, str(temp_dir)],
-                check=True, timeout=_GIT_TIMEOUT, capture_output=True, env=git_env,
-            )
-    except Exception:
-        _cleanup(temp_dir)
-        raise
-
-    if skill_path and not (temp_dir / skill_path).exists():
-        _cleanup(temp_dir)
-        raise ValueError(f"Skill path '{skill_path}' not found in repository '{url}'")
-
-    # SKILL.md lives inside the subdir for sparse checkouts.
-    skill_root = temp_dir / skill_path if skill_path else temp_dir
-    label = f"{url}:{skill_path}" if skill_path else url
-    final_dir = _rename_and_cache_skill(type_dir, temp_dir, source_hash, skill_root, source_label=label)
-    return final_dir / skill_path if skill_path else final_dir
-
-
 def resolve_s3_skills(sources: list, s3_client=None) -> list:
     """Resolve s3:// skill URIs to local filesystem paths.
 
@@ -250,31 +151,6 @@ def resolve_s3_skills(sources: list, s3_client=None) -> list:
             skill_dir = _fetch_s3_skill(uri, s3_client)
         except Exception as e:
             raise ValueError(f"Failed to resolve S3 skill '{uri}': {e}") from e
-        paths.append(str(skill_dir.resolve()))
-    return paths
-
-
-def resolve_git_skills(sources: list, identity_client=None) -> list:
-    """Resolve git skill dicts to local filesystem paths.
-
-    Each source is a dict with keys: url (required), path (optional),
-    credentialArn (optional), username (optional).
-
-    Any fetch failure raises and fails the invocation — a partial skill set
-    would silently run the agent without capabilities the harness declared.
-    """
-    paths = []
-    for source in sources:
-        try:
-            skill_dir = _fetch_git_skill(
-                url=source["url"],
-                skill_path=source.get("path") or "",
-                credential_arn=source.get("credentialArn"),
-                username=source.get("username"),
-                identity_client=identity_client,
-            )
-        except Exception as e:
-            raise ValueError(f"Failed to resolve git skill '{source.get('url', source)}': {e}") from e
         paths.append(str(skill_dir.resolve()))
     return paths
 
