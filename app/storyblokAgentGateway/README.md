@@ -4,7 +4,8 @@ A Strands-based agent on Amazon Bedrock AgentCore that turns a product-launch br
 It never publishes directly — every page lands in a **Reviewing** workflow stage for human approval.
 
 This is the Gateway-connected variant: it reaches Storyblok's MCP server through an AgentCore Gateway target
-(IAM-signed, policy-enforceable) instead of a bare API key.
+(IAM-signed, policy-enforceable) instead of a bare API key. No Cedar policy engine is attached to the Gateway
+yet, though — see `TUTORIAL.md` at the project root for where this is headed.
 
 ## Related repos
 
@@ -48,7 +49,8 @@ above), so a content-model change takes effect on the next invocation.
 - **Runtime**: AgentCore Runtime, a Strands `Agent` behind `BedrockAgentCoreApp`. Model is native Bedrock Claude
   (`storyblok_kit/model.py`) — the execution role's own IAM credentials authenticate the call, no separate API key.
 - **Storyblok access**: an AgentCore Gateway target proxies MCP calls to Storyblok's hosted MCP server, signed
-  with AWS_IAM/SigV4, with AgentCore's Cedar policy engine attached for tool-call authorization.
+  with AWS_IAM/SigV4. No Cedar policy engine is attached yet — the Gateway authorizes any tool call from the
+  agent's own IAM role. Scoping that down to a least-privilege allow-list is a separate, later step.
 - **AI tools** (`ai_translate_story`, `fetch_ai_branding_guidelines`): local Strands `@tool` functions in
   `storyblok_kit/tools/`, calling Storyblok's Management API directly since neither has an MCP equivalent — see
   "Local tools and the Gateway MCPClient" below.
@@ -61,7 +63,7 @@ above), so a content-model change takes effect on the next invocation.
 - **Instructions**: workflow logic lives in two S3-hosted Skills, fetched per request and folded into the system
   prompt with `{{SPACE_ID}}` filled in — see `skills/` below.
 - **Infra**: provisioned via the `agentcore` CLI and its generated CDK stack (`agentcore/cdk/`) — one
-  `agentcore deploy` for the runtime, Gateway, policy engine, and credential providers.
+  `agentcore deploy` for the runtime, Gateway, and credential providers.
 
 ## Local tools and the Gateway MCPClient
 
