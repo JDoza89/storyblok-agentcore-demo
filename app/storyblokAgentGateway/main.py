@@ -7,8 +7,6 @@ from storyblok_kit.model import load_model
 from storyblok_kit.skills import load_skill_instructions
 from storyblok_kit.credentials import resolve_storyblok_space_id
 from storyblok_kit.hooks.space_guard import SpaceIdGuard
-from storyblok_kit.tools.ai_branding import fetch_ai_branding_guidelines
-from storyblok_kit.tools.ai_translate import ai_translate_story
 from mcp_client.client import get_all_gateway_mcp_clients
 
 app = BedrockAgentCoreApp()
@@ -16,7 +14,6 @@ log = app.logger
 
 SKILL_S3_URIS = [
     "s3://storyblok-agentcore-skills-485530831632/productBrief-to-storyblokPage",
-    "s3://storyblok-agentcore-skills-485530831632/brand-guidelines",
 ]
 
 
@@ -42,11 +39,10 @@ def _build_system_prompt() -> str:
 You are the Storyblok product-launch agent (Gateway-connected variant --
 reaches Storyblok's MCP server through an AgentCore Gateway target rather
 than connecting to it directly). You turn a product-launch brief into a
-Storyblok landing page: assembling approved components, localizing into
-target markets per brand guidelines, generating alt text and SEO metadata,
-and moving the result into the pre-publish review workflow stage. You never
-attempt to publish directly — you do not have publish rights, and should not
-try to work around that.
+Storyblok landing page: assembling approved components, generating alt
+text and SEO metadata, and moving the result into the pre-publish review
+workflow stage. You never attempt to publish directly — you do not have
+publish rights, and should not try to work around that.
 
 Always invoke tools through the actual tool-calling mechanism available to you.
 Never write a tool's arguments as plain JSON text in your response instead of
@@ -63,34 +59,15 @@ Follow the instructions below exactly.
 # Unlike the scaffold's flat `tools = []` built once at import time, this is a
 # function called fresh per session -- see docstring for why that matters here.
 def _build_tools() -> list:
-    """Assemble this session's tools: local @tool functions plus MCP clients.
+    """Assemble this session's tools: the Gateway MCP client(s).
 
     Called per-session (from get_or_create_agent), not at module import time --
     constructing the Gateway MCPClient at module load time (before any request/
     event-loop context exists) left its discovered tools disconnected from what
     the model actually saw. Building it per-session, inside real request
     handling, avoids that.
-
-    Local @tool functions (ai_translate_story, fetch_ai_branding_guidelines)
-    were previously believed to be fundamentally incompatible with sharing a
-    tools list with the Gateway MCPClient -- "confirmed reproducible 3/3" in
-    an earlier debugging pass, which led to moving them out to a Lambda-backed
-    "aiTools" Gateway target instead (see git history / TUTORIAL.md for that
-    detour). That conclusion didn't hold up: the actual causes were two
-    unrelated, since-fixed bugs present at the time of that debugging --
-    (1) the Strands MCPClient's own `prefix="reinventdemogateway"` kwarg
-    double-stacking with the Gateway's own `{target}___{tool}` naming into
-    unwieldy tool names that made the model avoid calling them, and (2) the
-    Gateway's own execution role missing `bedrock-agentcore:GetResourceApiKey`
-    on the correct workload-identity ARN (it was scoped to the target's name,
-    "SBMCP", when the real resource is scoped to the gateway's own id), which
-    made every Storyblok MCP tool call fail. With the prefix removed and that
-    IAM policy fixed, local tools and the Gateway MCPClient coexist in the
-    same list with no issues -- retested and confirmed. Mixing local tools
-    with a Gateway MCPClient is not unsupported; two specific, fixable bugs
-    were being misread as a structural incompatibility.
     """
-    tools = [fetch_ai_branding_guidelines, ai_translate_story]
+    tools = []
     for mcp_client in get_all_gateway_mcp_clients():
         if mcp_client:
             tools.append(mcp_client)

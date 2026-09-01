@@ -1,6 +1,6 @@
 ---
 name: productBrief-to-storyblokPage
-description: Turn a product-launch brief into a Storyblok landing page — assemble approved components, localize into target markets, generate alt text and SEO metadata, and move the story into the pre-publish workflow stage for human review.
+description: Turn a product-launch brief into a Storyblok landing page — assemble approved components, generate alt text and SEO metadata, and move the story into the pre-publish workflow stage for human review.
 ---
 
 # Product Brief → Storyblok Page
@@ -9,17 +9,23 @@ description: Turn a product-launch brief into a Storyblok landing page — assem
 
 Every Storyblok tool call in this skill operates on **space_id `{{SPACE_ID}}`**, region **`us`**. Both are fixed for this deployment — never ask for either, never guess a different value.
 
-The **Reviewing** workflow stage — where finished stories go (see workflow step 6) — is **`workflow_stage_id 205840442735385`**. This is fixed for this deployment; don't spend a tool call rediscovering it via `listWorkflowStages`.
+The **Reviewing** workflow stage — where finished stories go (see workflow step 5) — is **`workflow_stage_id 205840442735385`**. This is fixed for this deployment; don't spend a tool call rediscovering it via `listWorkflowStages`.
 
 Every story this skill creates or updates is a **`productPage`** (not `page`), living under the **Products** folder — **`parent_id 206598384073576`**. Both are fixed for this deployment; don't spend a tool call rediscovering them.
 
 `productPage`'s `body` field is restricted to a whitelist of components — **but don't trust a hardcoded list for this.** The content model can change, so workflow step 2 always fetches the live `productPage` schema and reads its `body.component_whitelist` fresh, every run. Whatever that live fetch returns is the complete, authoritative set of components you may use that run — never fall back to memory, to a previous run, or to a component that merely sounds right for a landing page (e.g. anything for team bios or testimonials is never part of this content type). As of this writing that list happens to be `button`, `card`, `cards`, `emailSignup`, `gallery`, `hero`, `specTable` — shown here only so the field reference table below means something, not as something to trust without checking.
 
-## Don't get stuck — finish all 7 steps before polishing anything
+## This version doesn't localize yet
 
-A completed page in the Reviewing stage with an imperfect field beats a perfect field on a page that never gets there. If you're unsure of a field's exact shape (e.g. a `table` field's structure), make one best-effort attempt using the examples in this skill, note the uncertainty in your final summary, and **move on immediately** — don't spend more than one extra tool call re-confirming something you're already unsure about. Every run must reach step 6 (move to Reviewing) and step 7 (final summary) — a run that stops partway through with no summary is a failure even if the story it created looks fine.
+This agent has no translation tool. If a brief lists multiple target markets, produce the page in its default
+language only, and flag in your final summary which markets/locales the brief asked for that this run did not
+localize into — don't attempt to translate content yourself, and don't silently drop the request.
 
-**A `200`/success response is not proof the operation did what you intended** — Storyblok's API can return success while silently no-op'ing (this is confirmed true for `ai_translate_language`; assume it could be true elsewhere too). Before claiming something worked in your final summary, re-fetch and check the actual result. If you can't confirm it worked, say so plainly instead of reporting success — a summary that overclaims is worse than one that honestly flags a gap.
+## Don't get stuck — finish all 6 steps before polishing anything
+
+A completed page in the Reviewing stage with an imperfect field beats a perfect field on a page that never gets there. If you're unsure of a field's exact shape (e.g. a `table` field's structure), make one best-effort attempt using the examples in this skill, note the uncertainty in your final summary, and **move on immediately** — don't spend more than one extra tool call re-confirming something you're already unsure about. Every run must reach step 5 (move to Reviewing) and step 6 (final summary) — a run that stops partway through with no summary is a failure even if the story it created looks fine.
+
+**A `200`/success response is not proof the operation did what you intended** — Storyblok's API can return success while silently no-op'ing. Before claiming something worked in your final summary, re-fetch and check the actual result. If you can't confirm it worked, say so plainly instead of reporting success — a summary that overclaims is worse than one that honestly flags a gap.
 
 ## Calling `execute_mutating` / `execute_readonly` correctly
 
@@ -81,19 +87,11 @@ execute_mutating(
 ```
 If the brief doesn't give you real spec values to fill this with (e.g. it only references a spec sheet PDF without listing the numbers), it's fine to leave `specs` with an empty `thead`/`tbody` — just flag in your final summary that the spec table has no data yet.
 
-**Localize into a target market** (see workflow step 4 — after the story already exists, one pass per locale). There is no query-param shortcut on `updateStory` for this — `ai_translate_language` as a bare `updateStory` param does NOT work (confirmed by direct testing: it returns HTTP 200 but never actually translates anything). The real mechanism, confirmed working end-to-end:
-
-1. Call the `ai_translate_story` tool with the story's id and the target `lang` code (e.g. `"de"`, `"ja"`). This tool triggers Storyblok's AI-translate job AND waits for it to genuinely finish (it polls internally) before returning — you don't need to poll anything yourself. **Storyblok saves the translated content directly onto the story once the job completes — there is no separate `updateStory` call to make.**
-2. After the tool returns success, fetch the story fresh (plain `getStory`, no `?language=` param — it doesn't reliably surface these fields on this API) and look for `<field>__i18n__<lang>` suffixed keys alongside the normal fields (e.g. `description__i18n__de`) — that's where the translated text actually lives. Confirm it's real translated text, not a copy of the default-language value, before reporting that locale as done.
-3. If the tool reports it timed out or the job disappeared before reaching 100%, don't assume it worked — check for the `__i18n__` fields anyway (per step 2), but if they're not there, report this locale as failed/incomplete rather than guessing.
-
-**CRITICAL, confirmed by real failure: `updateStory` replaces `story.content` in full, and this has actually destroyed a story's body in production — a run once left a story with `content: {"component": "page"}` and no `body` at all, because the localization step sent incomplete content.** This is not a hypothetical risk. Follow this exactly, every single time you call `updateStory` for any reason (localization or otherwise):
+**CRITICAL, confirmed by real failure: `updateStory` replaces `story.content` in full, and this has actually destroyed a story's body in production — a run once left a story with `content: {"component": "page"}` and no `body` at all, because an update sent incomplete content.** This is not a hypothetical risk. Follow this exactly, every single time you call `updateStory` for any reason:
 
 1. **Immediately before building the payload**, call `getStory` (or equivalent readonly fetch) fresh — do not reuse a content object you remember from an earlier step, even a few tool calls ago. Use exactly what comes back.
 2. Take that fetched `content` object whole, modify only the specific thing you intend to change (if anything), and send that complete object back as `story.content`. Never send a partial object, never send `{"component": "page"}` alone, never omit `body`.
-3. **After the call returns, re-fetch the story and confirm `content.body` is present and has the same number of blocks as before.** If `body` is missing, empty, or shorter than expected, you have just destroyed the page — stop immediately, do not proceed to further locales or steps, and say so plainly in your final summary rather than continuing as if nothing happened.
-
-The same fresh-fetch-and-verify discipline applies to localization specifically (step 3 of the localize instructions above) — persisting a translation is just another `updateStory` call, with all the same destructive-overwrite risk.
+3. **After the call returns, re-fetch the story and confirm `content.body` is present and has the same number of blocks as before.** If `body` is missing, empty, or shorter than expected, you have just destroyed the page — stop immediately, do not proceed to further steps, and say so plainly in your final summary rather than continuing as if nothing happened.
 
 ## Component field reference
 
@@ -117,7 +115,7 @@ Use these exact field names when building the `body` array — do not invent pla
 ## Example: what a completed page looks like
 
 The brief below is not hypothetical — running this workflow against it produced a real, published `productPage`
-story in this space (`products/aurora-trail-2`). Trimmed to the shape that matters — most locales, blocks, and the
+story in this space (`products/aurora-trail-2`). Trimmed to the shape that matters — most blocks and the
 `specTable` (covered separately above) omitted for brevity:
 
 ```json
@@ -147,12 +145,10 @@ story in this space (`products/aurora-trail-2`). Trimmed to the shape that matte
           ]}
         ]
       },
-      "description__i18n__de": "-- same ProseMirror doc shape, German text -- one key per enabled locale, added by the localize workflow step",
       "buttons": [
         {
           "component": "button", "_uid": "btn_waitlist", "text": "Join the waitlist", "color": "primary",
-          "link": {"linktype": "url", "url": "#signup"},
-          "text__i18n__de": "Jetzt vormerken lassen", "text__i18n__ja": "ウェイトリストに参加する"
+          "link": {"linktype": "url", "url": "#signup"}
         }
       ]
     }
@@ -168,11 +164,8 @@ story in this space (`products/aurora-trail-2`). Trimmed to the shape that matte
 }
 ```
 
-Three patterns worth noticing:
+Two patterns worth noticing:
 
-- **A localized value sits right next to its default-language field, same name plus `__i18n__<lang>`** — never a
-  separate translated copy of the story. Only fields with actual translatable content get one; `_uid`, `component`,
-  `link`, and asset objects never do.
 - **Every asset is the full object** (`id`, `filename`, `alt`, `fieldtype`, ...), never a bare id — `hero.image`
   above, and identically for `card.icon`, `gallery.images`, and `productPage.og_image`.
 - The real story's `body` had 5 blocks (`hero`, `cards`, `gallery`, `specTable`, `emailSignup`) — this example
@@ -183,7 +176,7 @@ Three patterns worth noticing:
 The input to this skill is whatever the caller pasted in — it might be a real brief, a fragment, or something unrelated. Before doing anything else:
 
 1. Check whether it's plausibly a product-launch brief: does it name an actual product, and does it contain at least some of target audience, benefits/value proposition, or launch timing? A brief doesn't need every field (see below), but it needs to be recognizably about launching a specific product.
-2. If it passes that check, **proceed through the full workflow below autonomously** — don't pause to ask the caller for confirmation between steps, don't ask which components to use, don't ask for the space ID. Get to work and report back only once the story is in review (step 7), or if you hit one of the explicit stop conditions in steps 1 or 4 of the workflow.
+2. If it passes that check, **proceed through the full workflow below autonomously** — don't pause to ask the caller for confirmation between steps, don't ask which components to use, don't ask for the space ID. Get to work and report back only once the story is in review (step 6), or if you hit one of the explicit stop conditions in steps 1 or 2 of the workflow.
 3. If it clearly isn't a product brief (e.g. no identifiable product, or unrelated content entirely), say so plainly and stop rather than guessing at what to build.
 
 ## What a product brief looks like
@@ -194,7 +187,7 @@ Briefs arrive as free-form text or a doc export — there's no fixed schema — 
 - **Launch date(s)** — projected launch date, and separately a comms/announcement date if one is given
 - **Target audience** — who this is for, described concretely enough to inform tone (not just a demographic label)
 - **Core benefits / value proposition** — the 2-4 things being sold, usually phrased as "what we're selling / why it matters / the payoff"
-- **Target markets or locales** — which countries/languages this page needs to exist in
+- **Target markets or locales** — this version doesn't localize into them yet (see above), but still note them in your final summary as a gap
 - **Assets referenced** — product photography, video, spec sheets; note what's referenced even if the file itself isn't attached, so the page can flag missing assets rather than fabricate them
 - **Success metrics** (optional) — useful context for what the page should emphasize, not something the page itself displays
 
@@ -236,25 +229,24 @@ Acquisition: 500 waitlist signups pre-launch.
 
 ## Workflow
 
-1. **Parse the brief.** Extract the fields above. If a field this workflow depends on is missing (target markets, core benefits, or referenced assets), note the gap explicitly rather than inventing content to fill it — flag it in the final summary to the human reviewer instead of guessing.
+1. **Parse the brief.** Extract the fields above. If a field this workflow depends on is missing (core benefits or referenced assets), note the gap explicitly rather than inventing content to fill it — flag it in the final summary to the human reviewer instead of guessing.
 
-2. **Gather what you need before drafting anything — this read-only pass is the only round of Storyblok reads this workflow should need.** Do these four things, in any order, before writing a single field:
+2. **Gather what you need before drafting anything — this read-only pass is the only round of Storyblok reads this workflow should need.** Do these three things, in any order, before writing a single field:
 
    1. **Fetch the live component whitelist, then the live field schema for every component in it.** Look up the `productPage` component's current schema (e.g. search components for `productPage`) and read its `body` field's `component_whitelist`. This is the complete, authoritative list of components you may use this run — see the Space section above. Don't reuse a whitelist from memory or a previous run.
 
-      Then, for each component the whitelist names, fetch its own live schema too (`getComponent`/`listManagementComponents`) to learn its real fields. That live fetch is the authoritative field reference for this run and always overrides the "Component field reference" table below. **Only fall back to that table, per component, if its live fetch fails or errors** — same two-tier pattern as `brand-guidelines` (live first, baked-in snapshot only on failure) — and say in your final summary which component(s), if any, you had to fall back for. If the whitelist ever names a component not covered by that table at all, there is no fallback for it — its live fetch is mandatory, not optional.
+      Then, for each component the whitelist names, fetch its own live schema too (`getComponent`/`listManagementComponents`) to learn its real fields. That live fetch is the authoritative field reference for this run and always overrides the "Component field reference" table below. **Only fall back to that table, per component, if its live fetch fails or errors**, and say in your final summary which component(s), if any, you had to fall back for. If the whitelist ever names a component not covered by that table at all, there is no fallback for it — its live fetch is mandatory, not optional.
    2. **Check whether this product already has a page.** Search stories under the Products folder (`parent_id 206598384073576`) for one matching this brief's product (by name or an obvious slug match).
-      - **If one exists, this run is an update, not a create.** Fetch its full current content and compare it against the brief: identify only what's actually new or different (new/changed benefits, a different launch date, copy that no longer matches, newly-referenced assets, a market not yet localized, etc.). Leave everything unchanged alone in step 3 — the goal is a targeted edit, not a full re-draft from scratch.
+      - **If one exists, this run is an update, not a create.** Fetch its full current content and compare it against the brief: identify only what's actually new or different (new/changed benefits, a different launch date, copy that no longer matches, newly-referenced assets, etc.). Leave everything unchanged alone in step 3 — the goal is a targeted edit, not a full re-draft from scratch.
       - **If none exists, this run is a create.** Proceed normally in step 3.
-   3. **Fetch brand guidelines.** Follow the `brand-guidelines` skill once per run, regardless of create or update.
-   4. **Locate real assets.** When the brief says an asset lives "in [Assets/DAM] under '<some folder name>'", that's a real Storyblok asset folder — find it, don't guess:
+   3. **Locate real assets.** When the brief says an asset lives "in [Assets/DAM] under '<some folder name>'", that's a real Storyblok asset folder — find it, don't guess:
       1. Call `listAssetFolders` and match the brief's referenced location against the folder names returned (fuzzy match is fine — e.g. "Aurora Trail 2 / Launch" in the brief matching a folder literally named that).
       2. Call `listAssets` with `in_folder: <that folder's id>` to get the real asset objects.
       3. Pick sensibly by filename where it's obvious (e.g. a file named `hero.jpg` for the hero component's image, the rest for the gallery) — don't just grab the first N arbitrarily.
-      4. These assets likely have empty `alt` text already (check first) — you still need to write real, descriptive alt text for each one as part of step 5, even when the image itself is real.
+      4. These assets likely have empty `alt` text already (check first) — you still need to write real, descriptive alt text for each one as part of step 4, even when the image itself is real.
       5. Only fall back to a placeholder asset if you searched and genuinely found no matching folder or no assets in it — and say so explicitly in your final summary. Don't reach for a placeholder just because the first thing you tried didn't surface it.
 
-   Once these four reads are done, everything else in this workflow is drafting (no tool call) followed by writes — the only further reads you should need are the fresh-fetch-immediately-before-write re-checks already required around any `updateStory` call (see the CRITICAL note above), which exist purely to avoid clobbering content, not to gather new information.
+   Once these three reads are done, everything else in this workflow is drafting (no tool call) followed by writes — the only further reads you should need are the fresh-fetch-immediately-before-write re-checks already required around any `updateStory` call (see the CRITICAL note above), which exist purely to avoid clobbering content, not to gather new information.
 
 3. **Write the page.** Use only the components from step 2.1's live whitelist to build or update the `productPage` story via the Storyblok MCP tools, in space `{{SPACE_ID}}`. Do not invent new component types and do not reach for anything outside that whitelist — there is no team-bio or testimonial component available on a product page, so briefs mentioning that kind of content should simply skip it. Map brief fields to page structure directly: core benefits → feature/benefit blocks (the `cards`/`card` components), value proposition → hero copy (`hero`), product photography → the `gallery` component, a referenced spec sheet PDF → a `button` linking directly to the asset, structured specs → `specTable`, a waitlist/early-access ask → `emailSignup`.
 
@@ -275,7 +267,6 @@ Acquisition: 500 waitlist signups pre-launch.
    ```
    This applies identically to placeholder assets too — a placeholder is still a real asset id you found via `listAssets`/`listAssetFolders`, so it still needs its full object, not a bare id.
 
-4. **Localize.** There is no separate "create a translated story" operation — translations live as extra fields on the *same* story, keyed by language. For each target market/locale from the brief, use the `ai_translate_story` tool followed by `updateStory` to persist (exact two-step call shape above) — do this once per locale, after the story exists (step 3), not before. On an update run, skip re-translating a locale whose relevant fields didn't change in step 3 (no point spending a translation job on text that's already been translated) — but do translate any locale that's newly enabled or whose changed fields need it. After each translation, spot-check the tone against the brand guidelines from step 2 (Storyblok's generic AI translation won't itself know your brand voice) and adjust wording for that locale's fields if it reads off. If a target locale isn't enabled on the space yet, flag it rather than silently skipping it or guessing.
-5. **Generate metadata.** Alt text for every new image, SEO title/description per locale, using the `productPage` component's SEO tab fields (`meta_title`, `meta_description`, `og_image`). On an update run, only touch metadata tied to what actually changed — don't regenerate alt text or SEO copy for images/fields step 2.2 already found unchanged.
-6. **Move to review.** Move the story to the **Reviewing** workflow stage using `createWorkflowStageChange` (exact call shape above). Never attempt to publish directly — this agent does not have publish rights, and should not try to work around that.
-7. **Stop.** Once the story is in the Reviewing stage, summarize what was built or changed (say explicitly whether this was a create or an update, and if an update, exactly what changed), which locales were completed, and any gaps flagged in step 1 or step 4. A human reviews and publishes from the Visual Editor.
+4. **Generate metadata.** Alt text for every new image, plus SEO title/description, using the `productPage` component's SEO tab fields (`meta_title`, `meta_description`, `og_image`). On an update run, only touch metadata tied to what actually changed — don't regenerate alt text or SEO copy for images/fields step 2.2 already found unchanged.
+5. **Move to review.** Move the story to the **Reviewing** workflow stage using `createWorkflowStageChange` (exact call shape above). Never attempt to publish directly — this agent does not have publish rights, and should not try to work around that.
+6. **Stop.** Once the story is in the Reviewing stage, summarize what was built or changed (say explicitly whether this was a create or an update, and if an update, exactly what changed), any target markets/locales from the brief that this run did not localize into, and any gaps flagged in step 1 or step 2.3. A human reviews and publishes from the Visual Editor.

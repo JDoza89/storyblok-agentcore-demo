@@ -18,14 +18,13 @@ Full workflow lives in `skills/productBrief-to-storyblokPage/SKILL.md`:
 
 1. **Parse the brief** — product, launch date, audience, benefits, markets, assets. Flags missing fields instead
    of inventing them.
-2. **Gather what it needs** — live `productPage` component whitelist, whether a page already exists, brand
-   guidelines, real assets.
+2. **Gather what it needs** — live `productPage` component whitelist, whether a page already exists, real assets.
 3. **Write the page** — `createStory`, or a diffed `updateStory` for an existing one, using only whitelisted
    components.
-4. **Localize** — Storyblok's AI-translate job per market, confirmed complete before moving on.
-5. **Generate metadata** — alt text, SEO title/description per locale.
-6. **Move to review** — `createWorkflowStageChange` into Reviewing.
-7. **Stop** — summarizes what changed, which locales completed, and any gaps, for the human reviewer.
+4. **Generate metadata** — alt text, SEO title/description.
+5. **Move to review** — `createWorkflowStageChange` into Reviewing.
+6. **Stop** — summarizes what changed and any gaps, for the human reviewer. No localization yet in this
+   revision — target markets from the brief are flagged as a gap, not acted on.
 
 ## The human review loop
 
@@ -51,37 +50,16 @@ above), so a content-model change takes effect on the next invocation.
 - **Storyblok access**: an AgentCore Gateway target proxies MCP calls to Storyblok's hosted MCP server, signed
   with AWS_IAM/SigV4. No Cedar policy engine is attached yet — the Gateway authorizes any tool call from the
   agent's own IAM role. Scoping that down to a least-privilege allow-list is a separate, later step.
-- **AI tools** (`ai_translate_story`, `fetch_ai_branding_guidelines`): local Strands `@tool` functions in
-  `storyblok_kit/tools/`, calling Storyblok's Management API directly since neither has an MCP equivalent — see
-  "Local tools and the Gateway MCPClient" below.
 - **Credentials**: the Storyblok PAT is an `ApiKeyCredentialProvider` in AgentCore Identity, never hardcoded.
   Space id and region aren't secrets, so they're plain `STORYBLOK_SPACE_ID` / `STORYBLOK_REGION` environment
   variables instead. `storyblok_kit/credentials.py` resolves all three. Pointing a new deployment at a different
   space/region/PAT needs zero code changes — just its own env vars and credential provider under the same names.
 - **Guardrail**: `storyblok_kit/hooks/space_guard.py` blocks any tool call whose `space_id` doesn't match — a
   code-level restriction, not just a prompt instruction.
-- **Instructions**: workflow logic lives in two S3-hosted Skills, fetched per request and folded into the system
+- **Instructions**: workflow logic lives in an S3-hosted Skill, fetched per request and folded into the system
   prompt with `{{SPACE_ID}}` filled in — see `skills/` below.
 - **Infra**: provisioned via the `agentcore` CLI and its generated CDK stack (`agentcore/cdk/`) — one
   `agentcore deploy` for the runtime, Gateway, and credential providers.
-
-## Local tools and the Gateway MCPClient
-
-`ai_translate_story` and `fetch_ai_branding_guidelines` call Storyblok's Management API directly, as local Strands
-`@tool` functions sitting alongside the Gateway `MCPClient` in `_build_tools()` — neither has a Storyblok MCP
-equivalent.
-
-This combination was once believed to break tool discovery outright. It didn't — two unrelated, since-fixed bugs
-were the real cause:
-
-- **Redundant tool-name prefix.** `MCPClient(..., prefix="reinventdemogateway")` stacked on the Gateway's own
-  `{target}___{tool}` naming produced unwieldy names (`reinventdemogateway_SBMCP___execute_mutating`), which made
-  the model narrate fake results instead of actually calling tools. Fixed by dropping the `prefix` kwarg.
-- **Wrong IAM resource ARN.** The Gateway role's policy scoped `GetResourceApiKey` to a workload identity named
-  after the *target* (`SBMCP`) instead of the *gateway's own id* — the one AWS actually checks. Every tool call
-  failed with a generic error until this was fixed (see step 4).
-
-Local tools and the Gateway `MCPClient` coexist fine now — confirmed by retest.
 
 For the full build walkthrough, including the real AWS-side issues hit along the way and what the underlying
 harness (Strands + AgentCore) gives you for free versus what had to be hand-built, see `TUTORIAL.md` at the
@@ -89,9 +67,10 @@ project root.
 
 ## Reusability
 
-- `storyblok_kit/` holds tools (`tools/ai_translate.py`, `tools/ai_branding.py`) for capabilities the Storyblok
-  MCP lacks. Structured so it _could_ become its own reusable package of Storyblok-agent building blocks
-  (credential resolution, the space-id guardrail, a skill fetcher, these tools).
+- `storyblok_kit/` holds `storyblok_kit/credentials.py` (credential/config resolution) and
+  `storyblok_kit/hooks/space_guard.py` (the space-id guardrail), structured so they _could_ become their own
+  reusable package of Storyblok-agent building blocks. A later revision adds local `@tool` functions here for
+  capabilities the Storyblok MCP lacks.
 - `skills/` in this repo is **not** what the deployed agent reads from — the real source of truth is the S3 bucket
   in `main.py`'s `SKILL_S3_URIS`. Edit here for visibility/version control, then push to S3 for it to take effect.
 
