@@ -34,13 +34,11 @@ class SpaceIdGuard(HookProvider):
     if the model ever specified one -- this hook is what actually enforces the
     single-space restriction.
 
-    The allowed space id is resolved from AWS (resolve_storyblok_space_id, the
-    same credential-provider mechanism as the PAT), not hardcoded, at hook
-    construction time -- which happens per-session, during request handling,
-    so AgentCore Identity's workload token is available. This is what makes
+    The allowed space id is resolved from the STORYBLOK_SPACE_ID environment
+    variable (resolve_storyblok_space_id), not hardcoded. This is what makes
     the hook reusable across agents/deployments unchanged: point a different
-    deployment's storyblok-space-id credential provider at a different space,
-    and this hook enforces that one instead, with no code change.
+    deployment's STORYBLOK_SPACE_ID at a different space, and this hook
+    enforces that one instead, with no code change.
 
     If the space id can't be resolved at all, every space-scoped tool call is
     blocked rather than let through -- fail closed, not fail open.

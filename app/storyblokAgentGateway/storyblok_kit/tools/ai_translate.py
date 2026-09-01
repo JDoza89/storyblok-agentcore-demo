@@ -4,11 +4,14 @@ import time
 import httpx
 from strands import tool
 
-from storyblok_kit.credentials import resolve_storyblok_pat, resolve_storyblok_space_id
+from storyblok_kit.credentials import (
+    resolve_management_api_base,
+    resolve_storyblok_pat,
+    resolve_storyblok_space_id,
+)
 
 logger = logging.getLogger(__name__)
 
-MANAGEMENT_API_BASE = "https://api-us.storyblok.com/v1"
 POLL_INTERVAL_SECONDS = 2.0
 MAX_POLL_SECONDS = 120.0
 
@@ -48,6 +51,7 @@ def ai_translate_story(story_id: int, lang: str, overwrite: bool = True, code: s
     if space_id is None:
         return "Could not resolve the Storyblok space id -- cannot call ai_translate."
 
+    management_api_base = resolve_management_api_base()
     headers = {"Authorization": token, "Content-Type": "application/json"}
     body = {"lang": lang, "overwrite": overwrite}
     if code:
@@ -55,7 +59,7 @@ def ai_translate_story(story_id: int, lang: str, overwrite: bool = True, code: s
 
     try:
         trigger_response = httpx.put(
-            f"{MANAGEMENT_API_BASE}/spaces/{space_id}/stories/{story_id}/ai_translate",
+            f"{management_api_base}/spaces/{space_id}/stories/{story_id}/ai_translate",
             headers=headers,
             json=body,
             timeout=30.0,
@@ -69,7 +73,7 @@ def ai_translate_story(story_id: int, lang: str, overwrite: bool = True, code: s
     if not task_id:
         return f"ai_translate did not return a background_task_id: {trigger_response.text}"
 
-    task_url = f"{MANAGEMENT_API_BASE}/spaces/{space_id}/background_tasks/{task_id}"
+    task_url = f"{management_api_base}/spaces/{space_id}/background_tasks/{task_id}"
     deadline = time.monotonic() + MAX_POLL_SECONDS
     saw_progress = 0
 

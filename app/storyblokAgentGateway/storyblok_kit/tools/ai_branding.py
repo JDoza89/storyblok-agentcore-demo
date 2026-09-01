@@ -3,11 +3,13 @@ import logging
 import httpx
 from strands import tool
 
-from storyblok_kit.credentials import resolve_storyblok_pat, resolve_storyblok_space_id
+from storyblok_kit.credentials import (
+    resolve_management_api_base,
+    resolve_storyblok_pat,
+    resolve_storyblok_space_id,
+)
 
 logger = logging.getLogger(__name__)
-
-MANAGEMENT_API_BASE = "https://api-us.storyblok.com/v1"
 
 
 @tool
@@ -30,7 +32,7 @@ def fetch_ai_branding_guidelines() -> str:
 
     try:
         response = httpx.get(
-            f"{MANAGEMENT_API_BASE}/spaces/{space_id}/ai_branding_rules",
+            f"{resolve_management_api_base()}/spaces/{space_id}/ai_branding_rules",
             headers={"Authorization": token},
             timeout=10.0,
         )

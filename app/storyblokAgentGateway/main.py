@@ -23,16 +23,16 @@ SKILL_S3_URIS = [
 def _build_system_prompt() -> str:
     """Build this session's system prompt, with skill placeholders filled in.
 
-    Called per-session (from get_or_create_agent), not at module import time:
-    filling in {{SPACE_ID}} needs resolve_storyblok_space_id(), which needs
-    the per-request workload access token, only present during request
-    handling -- the same reason _build_tools() below is deferred.
+    Called per-session (from get_or_create_agent), not at module import time,
+    for consistency with _build_tools() below -- which does need to be
+    deferred, since its Gateway MCPClient needs the per-request workload
+    access token.
 
     Skill text never hardcodes a space id; it writes "{{SPACE_ID}}" and this
     is the one place that gets filled in, from the one resolved value, so a
     different deployment (different space, different PAT) needs no skill or
-    code changes, just its own storyblok-space-id / storyblok-mcp-pat
-    credential providers.
+    code changes, just its own STORYBLOK_SPACE_ID env var and
+    storyblok-mcp-pat credential provider.
     """
     space_id = resolve_storyblok_space_id()
     if space_id is None:

@@ -14,6 +14,16 @@
       "entrypoint": "main.py",
       "codeLocation": "app/storyblokAgentGateway/",
       "runtimeVersion": "PYTHON_3_14",
+      "envVars": [
+        {
+          "name": "STORYBLOK_SPACE_ID",
+          "value": "575814915634883"
+        },
+        {
+          "name": "STORYBLOK_REGION",
+          "value": "us"
+        }
+      ],
       "networkMode": "PUBLIC",
       "protocol": "HTTP"
     }
@@ -24,14 +34,6 @@
     {
       "authorizerType": "ApiKeyCredentialProvider",
       "name": "storyblok-mcp-pat"
-    },
-    {
-      "authorizerType": "ApiKeyCredentialProvider",
-      "name": "storyblok-space-id"
-    },
-    {
-      "authorizerType": "ApiKeyCredentialProvider",
-      "name": "storyblok-region"
     }
   ],
   "evaluators": [],

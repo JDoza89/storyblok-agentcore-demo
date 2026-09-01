@@ -52,9 +52,10 @@ above), so a content-model change takes effect on the next invocation.
 - **AI tools** (`ai_translate_story`, `fetch_ai_branding_guidelines`): local Strands `@tool` functions in
   `storyblok_kit/tools/`, calling Storyblok's Management API directly since neither has an MCP equivalent — see
   "Local tools and the Gateway MCPClient" below.
-- **Credentials**: the Storyblok PAT and space id are `ApiKeyCredentialProvider`s in AgentCore Identity, never
-  hardcoded. `storyblok_kit/credentials.py` resolves them per-request. Pointing a new deployment at a different
-  space/PAT needs zero code changes — just its own credential providers under the same names.
+- **Credentials**: the Storyblok PAT is an `ApiKeyCredentialProvider` in AgentCore Identity, never hardcoded.
+  Space id and region aren't secrets, so they're plain `STORYBLOK_SPACE_ID` / `STORYBLOK_REGION` environment
+  variables instead. `storyblok_kit/credentials.py` resolves all three. Pointing a new deployment at a different
+  space/region/PAT needs zero code changes — just its own env vars and credential provider under the same names.
 - **Guardrail**: `storyblok_kit/hooks/space_guard.py` blocks any tool call whose `space_id` doesn't match — a
   code-level restriction, not just a prompt instruction.
 - **Instructions**: workflow logic lives in two S3-hosted Skills, fetched per request and folded into the system
@@ -97,13 +98,15 @@ project root.
 | Variable                                    | Required              | Description                                                           |
 | -------------------------------------------- | --------------------- | --------------------------------------------------------------------- |
 | `LOCAL_DEV`                                  | No                    | Set to `1` to use `.env.local` instead of AgentCore Identity          |
-| `AGENTCORE_CREDENTIAL_STORYBLOK_SPACE_ID`    | Local dev only        | Overrides the `storyblok-space-id` credential provider for local runs |
+| `STORYBLOK_SPACE_ID`                         | Yes                   | The single Storyblok space this deployment may operate on             |
+| `STORYBLOK_REGION`                           | No (defaults to `us`) | Storyblok region (`us`, `eu`, `ca`, `ap`, `cn`) — picks the Management API base URL |
 | `AGENTCORE_GATEWAY_REINVENTDEMOGATEWAY_URL`  | Yes (injected by CDK) | The Gateway's MCP endpoint                                            |
 | `AWS_REGION`                                 | Yes                   | Region for AgentCore Identity/Bedrock calls                           |
 
-When deployed, the space id and PAT resolve from AgentCore Identity's credential providers (`storyblok-space-id`,
-`storyblok-mcp-pat`) — see `storyblok_kit/credentials.py`. Nothing in this repo should ever contain an actual PAT
-or space id; treat one as a bug and rotate the credential if you find it.
+`STORYBLOK_SPACE_ID` and `STORYBLOK_REGION` are plain env vars — set in `agentcore.json`'s runtime `envVars` when
+deployed, `.env.local` for local dev — since neither is a secret. The PAT resolves from AgentCore Identity's
+`storyblok-mcp-pat` credential provider instead — see `storyblok_kit/credentials.py`. Nothing in this repo should
+ever contain an actual PAT; treat one as a bug and rotate the credential if you find it.
 
 ## Layout
 
@@ -144,9 +147,12 @@ broken, half-created entry in `agentcore.json`'s `unassignedTargets`. Workaround
 import it.
 
 ```bash
-# Store the Storyblok token and space id as credentials AgentCore manages -- never hardcoded here.
+# Store the Storyblok token as a credential AgentCore manages -- never hardcoded here.
 agentcore add credential --name storyblok-mcp-pat --type api-key --api-key <your-storyblok-pat>
-agentcore add credential --name storyblok-space-id --type api-key --api-key <your-storyblok-space-id>
+
+# Space id and region aren't secrets -- set them as plain runtime env vars in
+# agentcore.json instead (see "Environment Variables" above), and in .env.local
+# for local runs.
 
 # Create the target directly, bypassing the broken CLI command
 aws bedrock-agentcore-control create-gateway-target \
