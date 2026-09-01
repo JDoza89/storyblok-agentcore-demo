@@ -3,7 +3,7 @@
 ```
 PRODUCT MARKETING BRIEF
 Product: Aurora Trail 2 — trail running shoe
-Launch date: 2026-09-15 (comms/teaser starts 2026-09-01)
+Launch date: 2026-09-15 (comms/teaser starts 2026-10-01)
 Markets: US (en), Germany (de), Japan (ja)
 
 Target audience
@@ -23,9 +23,9 @@ Why it matters: most shoes at this price pick one or the other.
 The payoff: fewer rolled ankles on technical descents, less fatigue
 on long days.
 
-Assets
-- Hero image - in Storyblok Assets under "Aurora Trail 2 / Launch"
-- Product photography (6 angles, studio + on-trail) — in Storyblok Assets under
+Assets — in Storyblok Assets under
   "Aurora Trail 2 / Launch"
-- Spec sheet  (weight, drop, stack height, sizing) - make this up for now
+- Hero image
+- Product photography (6 angles, studio + on-trail)
+- Spec sheet  (weight, drop, stack height, sizing)
 ```
