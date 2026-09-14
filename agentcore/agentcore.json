@@ -26,6 +26,25 @@
       ],
       "networkMode": "PUBLIC",
       "protocol": "HTTP"
+    },
+    {
+      "name": "storyblokAgentGatewayTS",
+      "build": "CodeZip",
+      "entrypoint": "main.js",
+      "codeLocation": "app/storyblokAgentGatewayTS/",
+      "runtimeVersion": "NODE_22",
+      "envVars": [
+        {
+          "name": "STORYBLOK_SPACE_ID",
+          "value": "575814915634883"
+        },
+        {
+          "name": "STORYBLOK_REGION",
+          "value": "us"
+        }
+      ],
+      "networkMode": "PUBLIC",
+      "protocol": "HTTP"
     }
   ],
   "memories": [],
@@ -43,6 +62,19 @@
       "name": "reInventDemoGateway",
       "protocolType": "None",
       "description": "Gateway for reInventDemoGateway",
+      "targets": [],
+      "authorizerType": "AWS_IAM",
+      "enableSemanticSearch": true,
+      "exceptionLevel": "NONE",
+      "policyEngineConfiguration": {
+        "policyEngineName": "reInventDemoPolicyEngine",
+        "mode": "ENFORCE"
+      }
+    },
+    {
+      "name": "StoryblokMCPGateway",
+      "protocolType": "None",
+      "description": "Gateway for StoryblokMCPGateway",
       "targets": [],
       "authorizerType": "AWS_IAM",
       "enableSemanticSearch": true,
@@ -97,7 +129,7 @@
         {
           "name": "allowScopedOperations",
           "description": "Exactly the readonly/mutating Storyblok operations this agent currently uses",
-          "statement": "// Exactly the Storyblok operations this agent is currently allowed to run.\n//\n// To allow a new operation: add its exact name to the matching list\n// below (readonly or mutating) and redeploy -- nothing else in this\n// file needs to change.\n// To remove one: delete its line.\n//\n// This is intentionally the ONLY thing gating execute_readonly /\n// execute_mutating -- there is no other policy narrowing these two\n// actions, so an operation not listed here is denied by default.\npermit (\n    principal,\n    action in [\n        AgentCore::Action::\"SBMCP___execute_readonly\",\n        AgentCore::Action::\"SBMCP___execute_mutating\"\n    ],\n    resource == AgentCore::Gateway::\"arn:aws:bedrock-agentcore:us-east-1:485530831632:gateway/reinventdemo-reinventdemogateway-ianze4pdtu\"\n)\nwhen {\n    [\n        // -- readonly, via SBMCP___execute_readonly --\n        \"getStoryById\",\n        \"listStories\",\n        \"listAssetFolders\",\n        \"getComponent\",\n        \"listAssets\",\n\n        // -- mutating, via SBMCP___execute_mutating --\n        \"createStory\",\n        \"updateAsset\",\n        \"createWorkflowStageChange\"\n    ].contains(context.input.operation)\n};",
+          "statement": "// Exactly the Storyblok operations this agent is currently allowed to run.\n//\n// To allow a new operation: add its exact name to the matching list\n// below (readonly or mutating) and redeploy -- nothing else in this\n// file needs to change.\n// To remove one: delete its line.\n//\n// This is intentionally the ONLY thing gating execute_readonly /\n// execute_mutating -- there is no other policy narrowing these two\n// actions, so an operation not listed here is denied by default.\npermit (\n    principal,\n    action in [\n        AgentCore::Action::\"SBMCP___execute_readonly\",\n        AgentCore::Action::\"SBMCP___execute_mutating\"\n    ],\n    resource == AgentCore::Gateway::\"arn:aws:bedrock-agentcore:us-east-1:485530831632:gateway/reinventdemo-reinventdemogateway-ianze4pdtu\"\n)\nwhen {\n    [\n        // -- readonly, via SBMCP___execute_readonly --\n        \"getStoryById\",\n        \"listStories\",\n        \"listAssetFolders\",\n        \"getComponent\",\n        \"listAssets\",\n\n        // -- mutating, via SBMCP___execute_mutating --\n        \"createStory\",\n        \"updateStory\",\n        \"updateAsset\",\n        \"createWorkflowStageChange\"\n    ].contains(context.input.operation)\n};",
           "sourceFile": "agentcore/policies/allow-scoped-operations.cedar",
           "validationMode": "FAIL_ON_ANY_FINDINGS",
           "enforcementMode": "ACTIVE",
