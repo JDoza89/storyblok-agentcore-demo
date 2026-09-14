@@ -27,6 +27,7 @@ when {
 
         // -- mutating, via SBMCP___execute_mutating --
         "createStory",
+        "updateStory",
         "updateAsset",
         "createWorkflowStageChange"
     ].contains(context.input.operation)
