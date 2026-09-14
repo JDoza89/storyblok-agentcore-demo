@@ -59,7 +59,7 @@ If the brief gives you no real values for a table (e.g. it references a spec-she
 
 **`updateStory` replaces `story.content` in full, and this has actually destroyed a story's body in production** — a run once left a story with `content: {"component": "page"}` and no `body` at all, because the localization step sent incomplete content. This is not hypothetical. Follow this exactly, every time you call `updateStory` for any reason:
 
-1. **Immediately before building the payload**, call `getStory` fresh — do not reuse a content object you fetched earlier, even a few tool calls ago. Use exactly what comes back.
+1. **Immediately before building the payload**, call `getStoryById` fresh — do not reuse a content object you fetched earlier, even a few tool calls ago. Use exactly what comes back.
 2. Take that fetched `content` object whole, modify only the specific thing you intend to change, and send that complete object back as `story.content`. Never send a partial object, never send just `{"component": "..."}`, never omit `body`.
 3. **After the call returns, re-fetch and confirm `content.body` is present with the same number of blocks as before.** If `body` is missing, empty, or shorter than expected, you have destroyed the page — stop immediately, do not proceed to further locales or steps, and say so plainly in your final summary.
 
@@ -68,7 +68,7 @@ If the brief gives you no real values for a table (e.g. it references a spec-she
 There is no query-param shortcut on `updateStory` — `ai_translate_language` as a bare `updateStory` param does NOT work (confirmed: returns HTTP 200 but never translates). The mechanism that does work:
 
 1. Call the `ai_translate_story` tool with the story's id and target `lang` code. It triggers Storyblok's AI-translate job **and waits for it to finish** — you don't poll anything yourself. Storyblok saves the translated content directly onto the story; **there is no follow-up `updateStory` to make.**
-2. After it returns success, fetch the story fresh (plain `getStory`, no `?language=` param — it doesn't reliably surface these fields) and look for `__i18n__<lang>` keys. Confirm it's real translated text, not a copy of the default-language value, before reporting that locale done.
+2. After it returns success, fetch the story fresh (plain `getStoryById`, no `?language=` param — it doesn't reliably surface these fields) and look for `__i18n__<lang>` keys. Confirm it's real translated text, not a copy of the default-language value, before reporting that locale done.
 3. If the tool reports a timeout or that the job vanished before 100%, don't assume it worked — check for `__i18n__` fields anyway; if absent, report the locale failed rather than guessing.
 
 ## On invocation

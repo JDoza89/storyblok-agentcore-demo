@@ -24,6 +24,8 @@ when {
         "listAssetFolders",
         "getComponent",
         "listAssets",
+        "listWorkflowStages",
+        "listManagementComponents",
 
         // -- mutating, via SBMCP___execute_mutating --
         "createStory",
