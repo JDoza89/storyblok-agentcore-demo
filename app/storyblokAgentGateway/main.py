@@ -5,7 +5,7 @@ from strands.agent.conversation_manager.null_conversation_manager import NullCon
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from storyblok_kit.model import load_model
 from storyblok_kit.skills import load_skill_instructions
-from storyblok_kit.credentials import resolve_storyblok_space_id
+from storyblok_kit.credentials import resolve_storyblok_region, resolve_storyblok_space_id
 from storyblok_kit.hooks.space_guard import SpaceIdGuard
 from storyblok_kit.tools.ai_branding import fetch_ai_branding_guidelines
 from storyblok_kit.tools.ai_translate import ai_translate_story
@@ -38,6 +38,8 @@ def _build_system_prompt() -> str:
     if space_id is None:
         raise RuntimeError("Could not resolve the Storyblok space id -- refusing to build a system prompt without it.")
 
+    region = resolve_storyblok_region()
+
     return f"""
 You are the Storyblok product-launch agent (Gateway-connected variant --
 reaches Storyblok's MCP server through an AgentCore Gateway target rather
@@ -56,7 +58,7 @@ failed run, not a completed one.
 
 Follow the instructions below exactly.
 
-{load_skill_instructions(SKILL_S3_URIS, placeholders={"SPACE_ID": str(space_id)})}
+{load_skill_instructions(SKILL_S3_URIS, placeholders={"SPACE_ID": str(space_id), "REGION": region})}
 """
 
 
