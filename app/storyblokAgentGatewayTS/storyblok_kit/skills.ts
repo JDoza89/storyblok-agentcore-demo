@@ -301,3 +301,85 @@ export async function loadSkillInstructions(
   }
   return text;
 }
+
+/**
+ * Mirror an entire skills bucket/prefix to a local directory and return its path.
+ *
+ * `AgentSkills` accepts a parent directory containing skill subdirectories, so
+ * one synced root gives the agent every skill in the bucket — including each
+ * skill's `references/` files, which progressive disclosure depends on and
+ * which a SKILL.md-only read would silently drop.
+ *
+ * This is what makes a skill installable without a redeploy: the bucket is
+ * listed at runtime, so uploading a new skill directory is the whole install
+ * step. Nothing here names an individual skill.
+ *
+ * Placeholders are substituted into every `.md` file after download, so skill
+ * text stays deployment-agnostic (`{{SPACE_ID}}`, `{{REGION}}`) exactly as it
+ * did when instructions were concatenated into the system prompt. Only
+ * non-secret values belong here — this text reaches the model.
+ */
+export async function syncSkillsRoot(
+  s3Uri: string,
+  options: { fetchSigned?: SignedFetch; placeholders?: Record<string, string> } = {},
+): Promise<string> {
+  const fetchSigned = options.fetchSigned ?? s3Client();
+  const uri = s3Uri.endsWith('/') ? s3Uri : `${s3Uri}/`;
+  const withoutScheme = uri.slice('s3://'.length);
+  const slash = withoutScheme.indexOf('/');
+  const bucket = slash === -1 ? withoutScheme.replace(/\/$/, '') : withoutScheme.slice(0, slash);
+  const prefix = slash === -1 ? '' : withoutScheme.slice(slash + 1);
+  if (!bucket) throw new Error(`Invalid S3 URI (no bucket): ${s3Uri}`);
+
+  const root = path.join(SKILLS_BASE, 'root', stableHash(uri));
+  // A completed sync leaves a marker; its absence means a previous run died
+  // partway and the tree cannot be trusted.
+  if (await exists(path.join(root, '.synced'))) return root;
+
+  await cleanup(root);
+  await fs.mkdir(root, { recursive: true });
+  const realRoot = await fs.realpath(root);
+
+  let total = 0;
+  let continuationToken: string | undefined;
+  const written: string[] = [];
+  do {
+    const page = await listObjectsPage(fetchSigned, bucket, prefix, continuationToken);
+    for (const object of page.objects) {
+      total += object.size;
+      if (total > S3_MAX_SIZE_BYTES) {
+        await cleanup(root);
+        throw new Error(`Skills bucket ${uri} exceeds 1 GB size limit`);
+      }
+      const rel = object.key.slice(prefix.length).replace(/^\/+/, '');
+      if (!rel || rel.endsWith('/')) continue;
+
+      const dest = path.resolve(realRoot, rel);
+      if (!dest.startsWith(realRoot + path.sep)) {
+        await cleanup(root);
+        throw new Error(`Path traversal detected in S3 key: ${object.key}`);
+      }
+      await fs.mkdir(path.dirname(dest), { recursive: true });
+      await downloadObject(fetchSigned, bucket, object.key, dest);
+      written.push(dest);
+    }
+    continuationToken = page.nextContinuationToken;
+  } while (continuationToken);
+
+  if (written.length === 0) {
+    await cleanup(root);
+    throw new Error(`No files found at S3 URI: ${uri}`);
+  }
+
+  const placeholders = Object.entries(options.placeholders ?? {});
+  if (placeholders.length > 0) {
+    for (const file of written.filter((f) => f.endsWith('.md'))) {
+      let text = await fs.readFile(file, 'utf8');
+      for (const [name, value] of placeholders) text = text.split(`{{${name}}}`).join(value);
+      await fs.writeFile(file, text);
+    }
+  }
+
+  await fs.writeFile(path.join(root, '.synced'), new Date().toISOString());
+  return root;
+}

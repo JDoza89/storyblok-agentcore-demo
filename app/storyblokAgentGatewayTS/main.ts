@@ -1,5 +1,6 @@
 import { BedrockAgentCoreApp } from 'bedrock-agentcore/runtime';
 import { Agent, NullConversationManager, type ToolList } from '@strands-agents/sdk';
+import { AgentSkills } from '@strands-agents/sdk/vended-plugins/skills';
 import type { InvokeArgs, MessageData } from '@strands-agents/sdk';
 import { z } from 'zod';
 
@@ -7,40 +8,26 @@ import { loadModel } from './model/load.js';
 import { getAllGatewayMcpClients } from './mcp_client/client.js';
 import { resolveStoryblokRegion, resolveStoryblokSpaceId } from './storyblok_kit/credentials.js';
 import { SpaceIdGuard } from './storyblok_kit/hooks/space-guard.js';
-import { loadSkillInstructions } from './storyblok_kit/skills.js';
+import { syncSkillsRoot } from './storyblok_kit/skills.js';
 import { fetchAiBrandingGuidelines } from './storyblok_kit/tools/ai-branding.js';
 import { aiTranslateStory } from './storyblok_kit/tools/ai-translate.js';
+import { makeReadSkillResourceTool } from './storyblok_kit/tools/skill-resources.js';
 
-const SKILL_S3_URIS = [
-  's3://storyblok-agentcore-skills-485530831632/productBrief-to-storyblokPage',
-  's3://storyblok-agentcore-skills-485530831632/brand-guidelines',
-];
+// The whole bucket, not a list of skills. Every skill directory under this
+// prefix is discovered at runtime, so installing a skill is an S3 upload and a
+// restart -- no code change, no redeploy.
+const SKILLS_S3_ROOT = 's3://storyblok-agentcore-skills-485530831632';
 
 /**
- * Build this session's system prompt, with skill placeholders filled in.
+ * Build this session's system prompt.
  *
- * Called per-session (from getOrCreateAgent), not at module import time, for
- * consistency with buildTools() below -- which does need to be deferred, since
- * its Gateway McpClient needs the per-request workload access token.
- *
- * Skill text never hardcodes a space id; it writes "{{SPACE_ID}}" and this is
- * the one place that gets filled in, from the one resolved value, so a different
- * deployment (different space, different PAT) needs no skill or code changes,
- * just its own STORYBLOK_SPACE_ID env var and storyblok-mcp-pat credential
- * provider.
+ * Skill instructions are no longer concatenated in here. The `AgentSkills`
+ * plugin injects each skill's name and description before every invocation and
+ * the agent pulls a skill's full text on demand through the `skills` tool, so
+ * the base prompt stays small and a skill's `references/` files stay reachable
+ * instead of being flattened away.
  */
-async function buildSystemPrompt(): Promise<string> {
-  const spaceId = resolveStoryblokSpaceId();
-  if (spaceId === null) {
-    throw new Error(
-      'Could not resolve the Storyblok space id -- refusing to build a system prompt without it.',
-    );
-  }
-
-  const instructions = await loadSkillInstructions(SKILL_S3_URIS, {
-    placeholders: { SPACE_ID: String(spaceId), REGION: resolveStoryblokRegion() },
-  });
-
+function buildSystemPrompt(): string {
   return `
 You are the Storyblok product-launch agent (Gateway-connected variant --
 reaches Storyblok's MCP server through an AgentCore Gateway target rather
@@ -57,9 +44,16 @@ calling it — if you notice yourself about to do that, stop and make the real
 tool call. A run that ends by printing JSON instead of calling a tool is a
 failed run, not a completed one.
 
-Follow the instructions below exactly.
+Your Storyblok tools are exposed through the Gateway and are named
+\`SBMCP___<tool>\` (for example \`SBMCP___search\`, \`SBMCP___describe\`,
+\`SBMCP___execute_readonly\`, \`SBMCP___execute_mutating\`). Skill text written
+for a direct MCP connection may call these \`mcp__storyblok__<tool>\` — the
+suffix after the final underscores is the same tool, so map it to the
+\`SBMCP___\` name you actually have.
 
-${instructions}
+**Before doing Storyblok work, activate the relevant skill with the \`skills\`
+tool and follow it.** Start with \`productBrief-to-storyblokPage\` for a
+product-launch brief; it will tell you which others to load.
 `;
 }
 
@@ -83,8 +77,13 @@ ${instructions}
  * (scoped to the target name "SBMCP" rather than the gateway's own id), which
  * failed every Storyblok MCP tool call.
  */
-function buildTools(): ToolList {
-  return [fetchAiBrandingGuidelines, aiTranslateStory, ...getAllGatewayMcpClients()];
+function buildTools(skillsRoot: string): ToolList {
+  return [
+    fetchAiBrandingGuidelines,
+    aiTranslateStory,
+    makeReadSkillResourceTool(skillsRoot),
+    ...getAllGatewayMcpClients(),
+  ];
 }
 
 const AGENT_CACHE_LIMIT = 128;
@@ -108,12 +107,20 @@ async function getOrCreateAgent(sessionId: string): Promise<Agent> {
     if (oldest !== undefined) agentCache.delete(oldest);
   }
 
+  const spaceId = resolveStoryblokSpaceId();
+  if (spaceId === null) {
+    throw new Error('Could not resolve the Storyblok space id -- refusing to start a session without it.');
+  }
+  const skillsRoot = await syncSkillsRoot(SKILLS_S3_ROOT, {
+    placeholders: { SPACE_ID: String(spaceId), REGION: resolveStoryblokRegion() },
+  });
+
   const agent = new Agent({
     model: loadModel(),
-    systemPrompt: await buildSystemPrompt(),
-    tools: buildTools(),
+    systemPrompt: buildSystemPrompt(),
+    tools: buildTools(skillsRoot),
     conversationManager: new NullConversationManager(),
-    plugins: [new SpaceIdGuard()],
+    plugins: [new SpaceIdGuard(), new AgentSkills({ skills: [skillsRoot] })],
   });
   agentCache.set(sessionId, agent);
   return agent;
