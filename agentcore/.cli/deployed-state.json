@@ -3,11 +3,6 @@
     "default": {
       "resources": {
         "runtimes": {
-          "storyblokAgentGateway": {
-            "runtimeId": "reInventDemo_storyblokAgentGateway-cSwRfAG80v",
-            "runtimeArn": "arn:aws:bedrock-agentcore:us-east-1:485530831632:runtime/reInventDemo_storyblokAgentGateway-cSwRfAG80v",
-            "roleArn": "arn:aws:iam::485530831632:role/AgentCore-reInventDemo-de-ApplicationAgentStoryblok-cZLRlHeumSb3"
-          },
           "storyblokAgentGatewayTS": {
             "runtimeId": "reInventDemo_storyblokAgentGatewayTS-ktiKfjAQaC",
             "runtimeArn": "arn:aws:bedrock-agentcore:us-east-1:485530831632:runtime/reInventDemo_storyblokAgentGatewayTS-ktiKfjAQaC",
@@ -56,7 +51,7 @@
         },
         "stackName": "AgentCore-reInventDemo-default",
         "identityKmsKeyArn": "arn:aws:kms:us-east-1:485530831632:key/a93a058a-1d3b-4529-b023-d1c207ed049a",
-        "deployHash": "4ce9cc7030ab91e0"
+        "deployHash": "cbd1df9ea24b798f"
       }
     }
   }
