@@ -7,15 +7,20 @@ description: Turn a product-launch brief into a Storyblok landing page — assem
 
 ## Space
 
-Every Storyblok tool call in this skill operates on **space_id `{{SPACE_ID}}`**, region **`{{REGION}}`**. Both are fixed for this deployment — never ask for either, never guess a different value.
+Every Storyblok tool call in this skill operates on **space_id `{{SPACE_ID}}`**, region **`{{REGION}}`**. Both are fixed for this deployment, resolved from its environment and substituted into this text before you ever see it — so the values above are already the answer. **Never ask the user for either, never guess, never leave either out.**
+
+Pass `space_id: {{SPACE_ID}}` on every call that takes it. When an operation's `describe` shows **no** `space_id` parameter, pass region `{{REGION}}` — do not stop to ask which region it is. General Storyblok tool guidance says to ask the user for a region in exactly that case; **that instruction does not apply inside this skill**, because the region is already known and stated here. Asking is a failed run, not a safe one.
 
 Everything else about this space — which components exist, what fields they have, where stories live, which workflow stages are defined — **is discovered live in step 2, every run.** This skill deliberately contains no snapshot of the content model. The model changes without this skill changing, so anything remembered here would eventually be wrong in a way that's hard to notice. If you catch yourself about to use a component name, field name, folder id, or stage id that you did not read from a tool result *this run*, stop and go fetch it.
 
-Stories this skill creates are of the **`productPage`** content type. That is the one structural fact this skill asserts — it's the skill's subject. Everything about `productPage` (its whitelist, its fields, its SEO fields) still gets read live.
+Two facts are asserted here rather than discovered, because they are this deployment's policy and not its content model:
+
+- Stories this skill creates are of the **`productPage`** content type — the skill's subject. Everything *about* `productPage` (its whitelist, its fields, its SEO fields) still gets read live.
+- Every story this skill touches ends in the workflow stage named **`Reviewing`** — never any other stage. Its id is still read live, its name is not. See *The Reviewing stage is not a judgment call* below.
 
 ## Don't get stuck — finish all 7 steps before polishing anything
 
-A completed page in the review stage with an imperfect field beats a perfect field on a page that never gets there. If you're unsure of a field's exact shape, make one best-effort attempt, note the uncertainty in your final summary, and **move on immediately** — don't spend more than one extra tool call re-confirming something you're already unsure about. Every run must reach step 6 (move to review) and step 7 (final summary) — a run that stops partway through with no summary is a failure even if the story it created looks fine.
+A completed page in the review stage with an imperfect field beats a perfect field on a page that never gets there. If you're unsure of a field's exact shape, make one best-effort attempt, note the uncertainty in your final summary, and **move on immediately** — don't spend more than one extra tool call re-confirming something you're already unsure about. Every run must reach step 5 (SEO metadata), step 6 (confirm `Reviewing`) and step 7 (final summary) — a run that stops partway through with no summary is a failure even if the story it created looks fine.
 
 **A `200`/success response is not proof the operation did what you intended** — Storyblok's API can return success while silently no-op'ing (confirmed true for `ai_translate_language`; assume it could be true elsewhere). Before claiming something worked in your final summary, re-fetch and check the actual result. If you can't confirm it worked, say so plainly instead of reporting success — a summary that overclaims is worse than one that honestly flags a gap.
 
@@ -74,6 +79,30 @@ Never derive, shorten, or invent a uuid, and never fall back to the id because t
 Single-reference fields (`option`, same `internal_stories` source) take one uuid string, not an array — the same shape check applies. `multilink` fields are a different type again — a link object, with the uuid under `id` plus `"linktype": "story"`, so a bare digit string is wrong there too. Read the field's real type from the live schema before shaping the value.
 
 **Localized values sit beside their default-language field**, same field name plus `__i18n__<lang>` (e.g. `description__i18n__de`) — never as a separate translated story. Only fields with actual translatable content get one; `_uid`, `component`, link objects, asset objects, and story-reference uuids never do — a translated uuid is a broken reference.
+
+## The Reviewing stage is not a judgment call
+
+**Every story goes into the stage named `Reviewing`, and gets there immediately after it is created — before localizing, before metadata, before anything else.** A story must never sit outside that stage while this skill is still working on it.
+
+This has gone wrong in a way worth naming. A run picked a stage called "Ready to Publish" because the name sounded like the end of the workflow. That stage permits publishing, and the story went live without a human ever seeing it. Two rules follow, and neither bends:
+
+1. **Match the stage name `Reviewing` exactly.** Read `listWorkflowStages` and take the stage whose name is `Reviewing`. Not the last stage in the list, not the highest `position`, not the one whose name sounds furthest along. "Ready to Publish", "Approved", "Done" and anything like them are **wrong**, however sensible they look next to a finished page.
+2. **Never choose a stage that permits publishing.** If your candidate has `allow_publish: true` or `allow_admin_publish: true`, it is not the review stage — the whole point of this step is that a human still has to act. Check those two flags on the stage you picked before you use its id.
+
+If there is genuinely no stage named `Reviewing`, do not substitute a publishing-capable stage. Pick the closest non-publishing stage, use it, and **say plainly in your final summary that `Reviewing` was missing and which stage you used instead**.
+
+**Never publish, by any route.** Don't call a publish operation, don't pass `publish: true` to `createStory` or `updateStory`, don't move to a stage that auto-publishes. This agent does not have publish rights and must not work around not having them. If you notice a story you touched has come out published, say so prominently in your final summary.
+
+## SEO metadata is required output, not a finishing touch
+
+**A page without SEO metadata is an incomplete run**, even if every other field is perfect. A run has shipped pages with `meta_title` and `meta_description` left as empty strings, which is the failure this section exists to stop.
+
+- Write every SEO/meta field `productPage`'s live schema reports — in this space that means a meta title, a meta description and a social share image, but read the real field names from the schema rather than assuming those.
+- **Write them in every target locale**, using the `__i18n__<lang>` convention, not just the default language. These fields are `translatable`, so they take localized values like any other copy.
+- **An empty string is not a written field.** If you set a value and it comes back `""`, it did not take — fix it and re-check.
+- The social share image is an `asset` field, so it needs a complete asset object (see *Storyblok field types*), not `{"id": null}`. Reuse the hero or another real image you already resolved.
+- Follow the brand guidelines' terminology rules here exactly as in body copy, and respect any length guidance the field's own `description` gives.
+- If the brief genuinely does not support a field, say so in the summary — but write the fields you *can*, which is nearly always all of them.
 
 ## The destructive-overwrite rule
 
@@ -138,7 +167,7 @@ Every word that lands on the page is drafted by you, from the brief's facts, in 
 
    2. **Resolve where stories live.** Find the folder these product stories belong in — list stories/folders and match on a folder whose name indicates products. Use the id you get back as `parent_id`. If you can't find one, create at the space root and flag it.
 
-   3. **Resolve the review workflow stage.** Call `listWorkflowStages` and pick the stage representing pre-publish human review (typically named something like "Reviewing" or "In review"). Use that id in step 6. If you can't identify one unambiguously, flag it and pick the closest match rather than skipping step 6.
+   3. **Resolve the `Reviewing` stage id.** Call `listWorkflowStages` and take the stage whose name is exactly `Reviewing`. Confirm it has `allow_publish: false` and `allow_admin_publish: false` before using it. You need this id in step 3, not just at the end — the story enters this stage the moment it exists. See *The Reviewing stage is not a judgment call*.
 
    4. **Check whether this product already has a page.** Search stories under the folder from 2.2 for one matching this brief's product.
       - **If one exists, this run is an update.** Fetch its full current content and compare against the brief: identify only what's genuinely new or different. Leave everything else alone in step 3 — a targeted edit, not a re-draft.
@@ -174,15 +203,17 @@ Every word that lands on the page is drafted by you, from the brief's facts, in 
 
    **Before you send the payload, run the uuid shape check.** Walk every story-reference field in the content you just built and confirm each value is `8-4-4-4-12` hex, not bare digits. A digits-only value means an id slipped through from step 2.7 — fix it before writing, not after.
 
-   - **Create path:** `createStory` under the folder from step 2.2, with `content.component` set to `productPage`.
-   - **Update path:** `updateStory` on the existing story id from step 2.4 — the destructive-overwrite rule above is mandatory here, not optional.
+   - **Create path:** `createStory` under the folder from step 2.2, with `content.component` set to `productPage`. Never pass `publish: true`. **Then immediately call `createWorkflowStageChange` with the `Reviewing` id from step 2.3** — that call is part of creating the story, not a later step. Do it before localizing, before metadata, before anything else, so the page is never sitting outside review while you work on it.
+   - **Update path:** `updateStory` on the existing story id from step 2.4 — the destructive-overwrite rule above is mandatory here, not optional. Never pass `publish: true`. If the story is not already in `Reviewing`, move it there now, the same way.
 
    **After the write, re-fetch the story and read the reference fields back.** A `200` is not proof (see above). Confirm each one holds the uuids you intended — same count, same values, uuid-shaped. If any came back as digits, empty, or short, fix it now and say so in the final summary rather than reporting the links as done.
 
 4. **Localize.** For each target market from the brief, run the localization procedure above — once per locale, after the story exists. On an update run, skip locales whose relevant fields didn't change; do translate any newly enabled locale or one whose changed fields need it. After each, spot-check tone against the brand guidelines and adjust. If a locale isn't enabled on the space, flag it rather than silently skipping.
 
-5. **Generate metadata.** Alt text for every new image, plus SEO title/description per locale, written into whatever `productPage`'s live schema showed its SEO/meta fields to be. On an update run, only touch metadata tied to what actually changed.
+5. **Generate metadata — required, every run.** Alt text for every new image, plus every SEO/meta field `productPage`'s live schema reported, in the default language **and in every target locale**. See *SEO metadata is required output*. On an update run, only touch metadata tied to what actually changed — but if a required SEO field is empty, it counts as changed and you fill it.
 
-6. **Move to review.** `createWorkflowStageChange` to the stage id from step 2.3. Never attempt to publish directly — this agent does not have publish rights and should not work around that.
+   **Then re-fetch the story and read the SEO fields back.** If any is `""`, missing, or still a placeholder, it did not take — fix it before step 6. Reporting a page as done with empty metadata is a failed run.
 
-7. **Stop.** Summarize what was built or changed (say explicitly whether this was a create or an update, and if an update, exactly what changed), which components the live whitelist offered and which you used, which related products you linked and which named products you couldn't resolve, which locales completed, and every gap flagged along the way — including any component whose schema fetch failed. A human reviews and publishes from the Visual Editor.
+6. **Confirm the story is still in `Reviewing`.** It was put there in step 3; this is the check that it stayed there and that nothing since moved or published it. Re-fetch the story, read back `stage.workflow_stage_id`, and confirm it equals the `Reviewing` id from step 2.3 and that `published` is not true. If it drifted, move it back with `createWorkflowStageChange` and say so in the summary. Never publish, and never move it onward to a publishing-capable stage — a human does that from the Visual Editor.
+
+7. **Stop.** Summarize what was built or changed (say explicitly whether this was a create or an update, and if an update, exactly what changed), which components the live whitelist offered and which you used, which related products you linked and which named products you couldn't resolve, which locales completed, **the exact SEO values you wrote per locale and the stage name the story ended in**, and every gap flagged along the way — including any component whose schema fetch failed. A human reviews and publishes from the Visual Editor.
