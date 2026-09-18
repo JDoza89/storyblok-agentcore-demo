@@ -9,16 +9,18 @@
             "roleArn": "arn:aws:iam::485530831632:role/AgentCore-reInventDemo-de-ApplicationAgentStoryblok-oLWMHK7d8dR5"
           }
         },
-        "gateways": {
-          "reInventDemoGateway": {
-            "gatewayId": "reinventdemo-reinventdemogateway-ianze4pdtu",
-            "gatewayArn": "arn:aws:bedrock-agentcore:us-east-1:485530831632:gateway/reinventdemo-reinventdemogateway-ianze4pdtu",
-            "gatewayUrl": "https://reinventdemo-reinventdemogateway-ianze4pdtu.gateway.bedrock-agentcore.us-east-1.amazonaws.com"
-          },
-          "StoryblokMCPGateway": {
-            "gatewayId": "reinventdemo-storyblokmcpgateway-uobizyamjo",
-            "gatewayArn": "arn:aws:bedrock-agentcore:us-east-1:485530831632:gateway/reinventdemo-storyblokmcpgateway-uobizyamjo",
-            "gatewayUrl": "https://reinventdemo-storyblokmcpgateway-uobizyamjo.gateway.bedrock-agentcore.us-east-1.amazonaws.com"
+        "mcp": {
+          "gateways": {
+            "reInventDemoGateway": {
+              "gatewayId": "reinventdemo-reinventdemogateway-ianze4pdtu",
+              "gatewayArn": "arn:aws:bedrock-agentcore:us-east-1:485530831632:gateway/reinventdemo-reinventdemogateway-ianze4pdtu",
+              "gatewayUrl": "https://reinventdemo-reinventdemogateway-ianze4pdtu.gateway.bedrock-agentcore.us-east-1.amazonaws.com"
+            },
+            "StoryblokMCPGateway": {
+              "gatewayId": "reinventdemo-storyblokmcpgateway-uobizyamjo",
+              "gatewayArn": "arn:aws:bedrock-agentcore:us-east-1:485530831632:gateway/reinventdemo-storyblokmcpgateway-uobizyamjo",
+              "gatewayUrl": "https://reinventdemo-storyblokmcpgateway-uobizyamjo.gateway.bedrock-agentcore.us-east-1.amazonaws.com"
+            }
           }
         },
         "credentials": {
