@@ -150,6 +150,7 @@ function tagValue(xml: string, tag: string): string | undefined {
 interface S3Object {
   key: string;
   size: number;
+  etag: string;
 }
 
 /** One page of ListObjectsV2, parsed from S3's XML response. */
@@ -172,12 +173,62 @@ async function listObjectsPage(
   for (const [, block] of xml.matchAll(/<Contents>([\s\S]*?)<\/Contents>/g)) {
     const key = tagValue(block, 'Key');
     if (key === undefined) continue;
-    objects.push({ key, size: Number(tagValue(block, 'Size') ?? '0') });
+    objects.push({
+      key,
+      size: Number(tagValue(block, 'Size') ?? '0'),
+      etag: tagValue(block, 'ETag') ?? '',
+    });
   }
 
   const truncated = tagValue(xml, 'IsTruncated') === 'true';
   const next = tagValue(xml, 'NextContinuationToken');
   return { objects, ...(truncated && next ? { nextContinuationToken: next } : {}) };
+}
+
+/**
+ * List every object under a prefix, following continuation tokens.
+ *
+ * Both callers need the whole listing up front rather than page by page: the
+ * listing is what the cache key is computed from, so it has to exist before
+ * anything decides whether a download is needed.
+ */
+async function listAllObjects(
+  fetchSigned: SignedFetch,
+  bucket: string,
+  prefix: string,
+  label: string,
+): Promise<S3Object[]> {
+  const objects: S3Object[] = [];
+  let total = 0;
+  let continuationToken: string | undefined;
+  do {
+    const page = await listObjectsPage(fetchSigned, bucket, prefix, continuationToken);
+    for (const object of page.objects) {
+      total += object.size;
+      if (total > S3_MAX_SIZE_BYTES) throw new Error(`${label} exceeds 1 GB size limit`);
+      objects.push(object);
+    }
+    continuationToken = page.nextContinuationToken;
+  } while (continuationToken);
+  return objects;
+}
+
+/**
+ * Cache key for a downloaded S3 prefix: the URI plus the current listing.
+ *
+ * Keying on the URI alone made the cache permanently stale -- a warm container
+ * that had already downloaded a prefix never looked at the bucket again, so
+ * re-uploading a skill changed nothing until the container was replaced.
+ * Folding each object's key, etag and size in means an upload produces a new
+ * key and the next session downloads it, while an unchanged bucket keeps
+ * hitting the same cached directory.
+ *
+ * Sorted because ListObjectsV2 ordering is not part of its contract, and an
+ * unstable key would defeat the cache entirely.
+ */
+function listingFingerprint(uri: string, objects: S3Object[]): string {
+  const lines = objects.map((o) => `${o.key}:${o.etag}:${String(o.size)}`).sort();
+  return stableHash([uri, ...lines].join('\n'));
 }
 
 /** Download one object to a local path. */
@@ -197,11 +248,7 @@ async function downloadObject(
 /** Download an s3:// skill prefix and return the local directory. */
 async function fetchS3Skill(source: string, fetchSigned: SignedFetch): Promise<string> {
   const uri = source.endsWith('/') ? source : `${source}/`;
-  const sourceHash = stableHash(uri);
   const typeDir = path.join(SKILLS_BASE, 's3');
-
-  const cached = await resolveCached(typeDir, sourceHash);
-  if (cached) return cached;
 
   const withoutScheme = uri.slice('s3://'.length);
   const slash = withoutScheme.indexOf('/');
@@ -209,41 +256,33 @@ async function fetchS3Skill(source: string, fetchSigned: SignedFetch): Promise<s
   const prefix = slash === -1 ? '' : withoutScheme.slice(slash + 1);
   if (!bucket) throw new Error(`Invalid S3 URI (no bucket): ${uri}`);
 
+  // List before consulting the cache: the listing IS the cache key.
+  const objects = await listAllObjects(fetchSigned, bucket, prefix, `S3 skill ${uri}`);
+  if (objects.length === 0) throw new Error(`No files found at S3 URI: ${uri}`);
+
+  const sourceHash = listingFingerprint(uri, objects);
+  const cached = await resolveCached(typeDir, sourceHash);
+  if (cached) return cached;
+
   const tempDir = path.join(typeDir, sourceHash);
   await cleanup(tempDir);
   await fs.mkdir(tempDir, { recursive: true });
   const tempRoot = await fs.realpath(tempDir);
 
-  let total = 0;
-  let continuationToken: string | undefined;
-  do {
-    const page = await listObjectsPage(fetchSigned, bucket, prefix, continuationToken);
-    for (const object of page.objects) {
-      total += object.size;
-      if (total > S3_MAX_SIZE_BYTES) {
-        await cleanup(tempDir);
-        throw new Error(`S3 skill ${uri} exceeds 1 GB size limit`);
-      }
-      const rel = object.key.slice(prefix.length).replace(/^\/+/, '');
-      if (!rel) continue;
+  for (const object of objects) {
+    const rel = object.key.slice(prefix.length).replace(/^\/+/, '');
+    if (!rel) continue;
 
-      // Resolve against the realpath'd root, not tempDir: on macOS os.tmpdir()
-      // is itself a symlink (/var -> /private/var), so comparing an unresolved
-      // dest against a resolved root flags every legitimate key as traversal.
-      const dest = path.resolve(tempRoot, rel);
-      if (dest !== tempRoot && !dest.startsWith(tempRoot + path.sep)) {
-        await cleanup(tempDir);
-        throw new Error(`Path traversal detected in S3 key: ${object.key}`);
-      }
-      await fs.mkdir(path.dirname(dest), { recursive: true });
-      await downloadObject(fetchSigned, bucket, object.key, dest);
+    // Resolve against the realpath'd root, not tempDir: on macOS os.tmpdir()
+    // is itself a symlink (/var -> /private/var), so comparing an unresolved
+    // dest against a resolved root flags every legitimate key as traversal.
+    const dest = path.resolve(tempRoot, rel);
+    if (dest !== tempRoot && !dest.startsWith(tempRoot + path.sep)) {
+      await cleanup(tempDir);
+      throw new Error(`Path traversal detected in S3 key: ${object.key}`);
     }
-    continuationToken = page.nextContinuationToken;
-  } while (continuationToken);
-
-  if (total === 0) {
-    await cleanup(tempDir);
-    throw new Error(`No files found at S3 URI: ${uri}`);
+    await fs.mkdir(path.dirname(dest), { recursive: true });
+    await downloadObject(fetchSigned, bucket, object.key, dest);
   }
 
   return renameAndCacheSkill(typeDir, tempDir, sourceHash, uri);
@@ -314,6 +353,11 @@ export async function loadSkillInstructions(
  * listed at runtime, so uploading a new skill directory is the whole install
  * step. Nothing here names an individual skill.
  *
+ * Editing an existing skill works the same way, because the cache key is the
+ * listing rather than the URI -- see `listingFingerprint`. The listing costs
+ * one ListObjectsV2 per session; a bucket that hasn't changed re-uses the tree
+ * already on disk and downloads nothing.
+ *
  * Placeholders are substituted into every `.md` file after download, so skill
  * text stays deployment-agnostic (`{{SPACE_ID}}`, `{{REGION}}`) exactly as it
  * did when instructions were concatenated into the system prompt. Only
@@ -331,7 +375,12 @@ export async function syncSkillsRoot(
   const prefix = slash === -1 ? '' : withoutScheme.slice(slash + 1);
   if (!bucket) throw new Error(`Invalid S3 URI (no bucket): ${s3Uri}`);
 
-  const root = path.join(SKILLS_BASE, 'root', stableHash(uri));
+  // List before consulting the cache: the listing IS the cache key, so a
+  // re-uploaded skill lands in a different root and gets downloaded, while an
+  // unchanged bucket keeps hitting the one already on disk.
+  const objects = await listAllObjects(fetchSigned, bucket, prefix, `Skills bucket ${uri}`);
+  const root = path.join(SKILLS_BASE, 'root', listingFingerprint(uri, objects));
+
   // A completed sync leaves a marker; its absence means a previous run died
   // partway and the tree cannot be trusted.
   if (await exists(path.join(root, '.synced'))) return root;
@@ -340,31 +389,20 @@ export async function syncSkillsRoot(
   await fs.mkdir(root, { recursive: true });
   const realRoot = await fs.realpath(root);
 
-  let total = 0;
-  let continuationToken: string | undefined;
   const written: string[] = [];
-  do {
-    const page = await listObjectsPage(fetchSigned, bucket, prefix, continuationToken);
-    for (const object of page.objects) {
-      total += object.size;
-      if (total > S3_MAX_SIZE_BYTES) {
-        await cleanup(root);
-        throw new Error(`Skills bucket ${uri} exceeds 1 GB size limit`);
-      }
-      const rel = object.key.slice(prefix.length).replace(/^\/+/, '');
-      if (!rel || rel.endsWith('/')) continue;
+  for (const object of objects) {
+    const rel = object.key.slice(prefix.length).replace(/^\/+/, '');
+    if (!rel || rel.endsWith('/')) continue;
 
-      const dest = path.resolve(realRoot, rel);
-      if (!dest.startsWith(realRoot + path.sep)) {
-        await cleanup(root);
-        throw new Error(`Path traversal detected in S3 key: ${object.key}`);
-      }
-      await fs.mkdir(path.dirname(dest), { recursive: true });
-      await downloadObject(fetchSigned, bucket, object.key, dest);
-      written.push(dest);
+    const dest = path.resolve(realRoot, rel);
+    if (!dest.startsWith(realRoot + path.sep)) {
+      await cleanup(root);
+      throw new Error(`Path traversal detected in S3 key: ${object.key}`);
     }
-    continuationToken = page.nextContinuationToken;
-  } while (continuationToken);
+    await fs.mkdir(path.dirname(dest), { recursive: true });
+    await downloadObject(fetchSigned, bucket, object.key, dest);
+    written.push(dest);
+  }
 
   if (written.length === 0) {
     await cleanup(root);

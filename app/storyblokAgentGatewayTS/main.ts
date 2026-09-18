@@ -14,8 +14,10 @@ import { aiTranslateStory } from './storyblok_kit/tools/ai-translate.js';
 import { makeReadSkillResourceTool } from './storyblok_kit/tools/skill-resources.js';
 
 // The whole bucket, not a list of skills. Every skill directory under this
-// prefix is discovered at runtime, so installing a skill is an S3 upload and a
-// restart -- no code change, no redeploy.
+// prefix is discovered at runtime and the local cache is keyed on the bucket's
+// current contents, so installing or editing a skill is an S3 upload and
+// nothing else -- no code change, no redeploy, no restart. The next session to
+// start picks it up.
 const SKILLS_S3_ROOT = 's3://storyblok-agentcore-skills-485530831632';
 
 /**
