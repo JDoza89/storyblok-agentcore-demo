@@ -6,7 +6,7 @@ import { z } from 'zod';
 
 import { loadModel } from './model/load.js';
 import { getAllGatewayMcpClients } from './mcp_client/client.js';
-import { resolveStoryblokRegion, resolveStoryblokSpaceId } from './storyblok_kit/credentials.js';
+import { primeStoryblokPat, resolveStoryblokRegion, resolveStoryblokSpaceId } from './storyblok_kit/credentials.js';
 import { SpaceIdGuard } from './storyblok_kit/hooks/space-guard.js';
 import { syncSkillsRoot } from './storyblok_kit/skills.js';
 import { fetchAiBrandingGuidelines } from './storyblok_kit/tools/ai-branding.js';
@@ -29,7 +29,7 @@ const SKILLS_S3_ROOT = 's3://storyblok-agentcore-skills-485530831632';
  * the base prompt stays small and a skill's `references/` files stay reachable
  * instead of being flattened away.
  */
-function buildSystemPrompt(): string {
+function buildSystemPrompt(spaceId: number): string {
   return `
 You are the Storyblok product-launch agent (Gateway-connected variant --
 reaches Storyblok's MCP server through an AgentCore Gateway target rather
@@ -56,6 +56,31 @@ suffix after the final underscores is the same tool, so map it to the
 **Before doing Storyblok work, activate the relevant skill with the \`skills\`
 tool and follow it.** Start with \`productBrief-to-storyblokPage\` for a
 product-launch brief; it will tell you which others to load.
+
+## How every run must end
+
+Write your normal human-readable summary first. Then make the very last line
+of your response a single AGENT_RESULT line, with nothing after it:
+
+AGENT_RESULT: {"status":"created","storyId":"123456789","storyUrl":"https://app.storyblok.com/#!/me/spaces/${spaceId}/stories/0/0/123456789","locales":{"de":"complete","ja":"partial"},"notes":"one short sentence"}
+
+Rules for that line, all of them mandatory:
+
+- One line, valid JSON after the \`AGENT_RESULT: \` prefix, no markdown fences
+  and no backticks around it.
+- \`status\` is one of "created", "updated", "unchanged", or "failed".
+- \`storyUrl\` for this space is always
+  https://app.storyblok.com/#!/me/spaces/${spaceId}/stories/0/0/<storyId>
+- If no story was created or updated, set \`storyId\` and \`storyUrl\` to null
+  and use "unchanged" or "failed".
+- Each locale is "complete", "partial", or "missing". Report what you actually
+  verified by re-fetching the story, not what a tool claimed.
+- \`notes\` is one short sentence a human would want in a Slack message.
+
+This line is how the calling workflow finds the page you built. A run that
+omits it, wraps it in a code fence, or puts anything after it cannot be
+handed back to the person who asked, so treat it as part of finishing the
+work rather than an afterthought.
 `;
 }
 
@@ -119,7 +144,7 @@ async function getOrCreateAgent(sessionId: string): Promise<Agent> {
 
   const agent = new Agent({
     model: loadModel(),
-    systemPrompt: buildSystemPrompt(),
+    systemPrompt: buildSystemPrompt(spaceId),
     tools: buildTools(skillsRoot),
     conversationManager: new NullConversationManager(),
     plugins: [new SpaceIdGuard(), new AgentSkills({ skills: [skillsRoot] })],
@@ -210,6 +235,12 @@ const app = new BedrockAgentCoreApp({
 
       const sessionId = context?.sessionId ?? 'default-session';
       const agent = await getOrCreateAgent(sessionId);
+
+      // Before the first yield, while the request context still exists -- see
+      // primeStoryblokPat(). Tools that need the PAT run mid-stream, by which
+      // point the workload-identity context is gone.
+      await primeStoryblokPat();
+
       const prompt = extractPrompt(payload);
 
       // Snapshot history before streaming so a failed turn can be rolled back.

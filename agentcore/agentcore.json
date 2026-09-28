@@ -22,6 +22,10 @@
         {
           "name": "STORYBLOK_REGION",
           "value": "us"
+        },
+        {
+          "name": "STORYBLOK_PAT_SECRET_ID",
+          "value": "arn:aws:secretsmanager:us-east-1:485530831632:secret:bedrock-agentcore-identity!default/apikey/storyblok-mcp-pat-f3eb6bf7-YRVsnj"
         }
       ],
       "networkMode": "PUBLIC",
