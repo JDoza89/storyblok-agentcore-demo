@@ -19,9 +19,21 @@ Everywhere this skill says **flag** something, call the `flag_gap` tool with a m
 
 The harness posts every flagged gap as a comment on the story after the run, so don't post comments yourself. Still list every gap in your final summary: the summary is what reaches Slack.
 
-## Don't get stuck
+## Always build the page
 
-A completed page in review with one imperfect field beats a perfect field on a page that never gets there. If you're unsure of a field's shape, make one best-effort attempt, note it in your summary, and move on. Every run reaches SEO metadata, the review stage, and a final summary.
+A completed page in review with placeholders and comments beats no page. If you're unsure of a field's shape, make one best-effort attempt, note it in your summary, and move on. Every run reaches SEO metadata, the review stage, and a final summary.
+
+**Never ask the caller a question or wait for an answer.** Nobody may be there to see it: whatever triggered the run may only read the final result. When something is missing or ambiguous, decide, build with what you have, and flag the rest. A question in your output is a gap you didn't flag.
+
+**Missing content becomes a placeholder, not an empty field.** When the brief doesn't give you something a component needs, fill it with a clearly marked placeholder and flag it:
+
+- Text and richtext: `[Placeholder: <what's needed and where it comes from>]`, for example `[Placeholder: spec values from the Aurora Trail 2 spec sheet]`.
+- SEO fields: a placeholder in the same form, in every locale, rather than an empty string.
+- Assets: a real asset from the space as a stand-in (see step 2.2), never an empty asset object.
+- Tables: one row whose cells are placeholders.
+- Story references, numbers, dates, and options: leave empty. There's no safe placeholder for a uuid, a price, or a launch date.
+
+Every placeholder gets its own `flag_gap`, pinned to its block and field, so the reviewer finds each one in the Visual Editor.
 
 ## Storyblok field types you will meet
 
@@ -50,7 +62,7 @@ The Space context tells you each field's type. Shape its value by type:
 }
 ```
 
-If the brief gives no real values for a table, leave `thead`/`tbody` empty and flag it.
+If the brief gives no real values for a table, use one row of placeholders and flag it (see **Always build the page**).
 
 **`bloks`** holds an array of nested components, each with its own `component` and `_uid`, drawn only from that field's `allows:` list.
 
@@ -82,9 +94,8 @@ Write every SEO field listed in the Space context, in the default language **and
 
 The input is whatever the caller pasted. Before anything else:
 
-1. Check it's plausibly a product-launch brief: it names a product and carries at least some of audience, benefits, or launch timing.
-2. If it passes, **proceed through the whole workflow autonomously.** Don't pause for confirmation or ask for the space id.
-3. If it clearly isn't a brief, say so and stop.
+1. If it names a product, treat it as a brief, however thin, and **proceed through the whole workflow autonomously.** Build the page from what's there, use placeholders for the rest, and flag every gap. Don't pause for confirmation or ask for anything.
+2. Only when the input names no product at all (a question, a greeting, unrelated text) is there nothing to build: say so and create nothing.
 
 ## What a product brief looks like
 
@@ -106,7 +117,7 @@ Briefs are free-form, but they carry the same handful of facts:
 - **Never paste brief text onto the page.** Rewrite bullet fragments as customer-facing copy that follows the tone, writing-style, and formatting rules in the brand guidelines.
 - **Apply the terminology rules** (preferred, avoid, never) to body copy, headings, alt text, and SEO alike.
 - **Keep every fact verifiable.** Don't round a number, drop a unit, soften a qualifier, or add a claim the brief doesn't support.
-- **Don't invent what isn't there.** If the brief is silent on something a component wants, leave it empty and flag it.
+- **Don't invent what isn't there.** If the brief is silent on something a component wants, use a marked placeholder and flag it, never plausible-sounding filler.
 - **If the Space context says the guidelines couldn't be fetched**, follow the `brand-guidelines` skill's fallback.
 
 ## Workflow

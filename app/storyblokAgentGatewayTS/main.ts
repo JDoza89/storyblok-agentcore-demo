@@ -73,6 +73,9 @@ the \`skills\` tool and follow it.**
   in Storyblok. Trust the readback; you don't need to re-fetch to confirm it.
 - When you finish, it verifies the story itself and may send you one
   follow-up listing anything left to fix.
+- Never ask the caller a question or wait for input: nobody may see it. Build
+  the page with what you have, use marked placeholders for missing content,
+  and flag each gap.
 - Record every gap for the human reviewer with \`flag_gap\`. The harness
   posts them as comments on the story after the run; don't post comments
   yourself.
