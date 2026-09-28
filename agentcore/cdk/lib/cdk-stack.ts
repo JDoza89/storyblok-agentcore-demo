@@ -113,6 +113,21 @@ export class AgentCoreStack extends Stack {
     }
     this.application = new AgentCoreApplication(this, 'Application', appProps as any);
 
+    // The storyblokAgentGatewayTS runtime syncs its skills from the whole skills
+    // bucket at session start. That access used to live only in an inline
+    // policy attached out-of-band; granting it here keeps it in the stack, so a
+    // recreated role still works with no manual step.
+    const SKILLS_BUCKET_ARN = 'arn:aws:s3:::storyblok-agentcore-skills-485530831632';
+    for (const env of this.application.environments.values()) {
+      if (env.agent.name !== 'storyblokAgentGatewayTS') continue;
+      env.runtime.role.addToPrincipalPolicy(
+        new iam.PolicyStatement({ actions: ['s3:ListBucket'], resources: [SKILLS_BUCKET_ARN] }),
+      );
+      env.runtime.role.addToPrincipalPolicy(
+        new iam.PolicyStatement({ actions: ['s3:GetObject'], resources: [`${SKILLS_BUCKET_ARN}/*`] }),
+      );
+    }
+
     // Create AgentCoreMcp if there are gateways configured
     if (mcpSpec?.agentCoreGateways && mcpSpec.agentCoreGateways.length > 0) {
       new AgentCoreMcp(this, 'Mcp', {

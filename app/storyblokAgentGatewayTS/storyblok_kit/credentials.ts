@@ -1,5 +1,3 @@
-import { withApiKey } from 'bedrock-agentcore/identity';
-
 import { awsRegion, createSigV4Fetch } from './sigv4.js';
 
 export const STORYBLOK_PAT_CREDENTIAL_NAME = 'storyblok-mcp-pat';
@@ -15,20 +13,6 @@ export const MANAGEMENT_API_BASE_BY_REGION: Record<string, string> = {
 };
 export const DEFAULT_REGION = 'us';
 
-/**
- * Resolve a named secret credential: env var override for local dev, AgentCore
- * Identity when deployed.
- *
- * Locally, `agentcore dev` decrypts credentials into env vars. There's no such
- * env var in the deployed runtime -- resolve it via AgentCore Identity's
- * workload-token exchange instead. `withApiKey` falls back to the request
- * context's workloadAccessToken, which only exists during request handling, so
- * this must be called from inside a request, never at module import time.
- *
- * Reserved for values that are genuine secrets (currently just the Storyblok
- * PAT). Non-secret config (space id, region) doesn't need this -- it's just a
- * plain environment variable, see resolveStoryblokSpaceId/Region below.
- */
 /**
  * Read a credential straight out of the Secrets Manager secret that AgentCore
  * Identity keeps it in.
@@ -79,6 +63,15 @@ async function resolveFromSecretsManager(secretId: string): Promise<string | nul
   }
 }
 
+/**
+ * Resolve a secret credential: the env var for local dev, otherwise the
+ * Secrets Manager secret named by STORYBLOK_PAT_SECRET_ID. Returns null rather
+ * than throwing, so the two tools that need it can report the gap.
+ *
+ * There is deliberately no AgentCore Identity (`withApiKey`) fallback. It needs
+ * a workload access token that SigV4 invocation never supplies, so in this
+ * deployment it could only ever fail.
+ */
 export async function resolveCredential(
   providerName: string,
   localDevEnvVar: string,
@@ -86,32 +79,19 @@ export async function resolveCredential(
   const fromEnv = process.env[localDevEnvVar];
   if (fromEnv) return fromEnv;
 
-  // Deployed path: read the secret directly. See resolveFromSecretsManager --
-  // AgentCore Identity's own workload-token exchange cannot complete under
-  // SigV4 invocation, so this is the path that actually works in the runtime.
   const secretId = process.env.STORYBLOK_PAT_SECRET_ID;
-  if (secretId) {
-    try {
-      const fromSecret = await resolveFromSecretsManager(secretId);
-      if (fromSecret) return fromSecret;
-      console.warn(`Secret '${secretId}' held no usable value for '${providerName}'`);
-    } catch (error) {
-      console.warn(`Could not read secret '${secretId}' for '${providerName}': ${String(error)}`);
-    }
-  }
-
-  try {
-    const readApiKey = withApiKey({ providerName })(async (apiKey: string) => apiKey);
-    const apiKey = await readApiKey();
-    if (!apiKey) {
-      console.warn(`AgentCore Identity returned no value for '${providerName}' — unavailable`);
-      return null;
-    }
-    return apiKey;
-  } catch (error) {
-    console.warn(`Could not resolve credential '${providerName}': ${String(error)}`);
+  if (!secretId) {
+    console.warn(`No ${localDevEnvVar} or STORYBLOK_PAT_SECRET_ID set -- '${providerName}' is unavailable`);
     return null;
   }
+  try {
+    const fromSecret = await resolveFromSecretsManager(secretId);
+    if (fromSecret) return fromSecret;
+    console.warn(`Secret '${secretId}' held no usable value for '${providerName}'`);
+  } catch (error) {
+    console.warn(`Could not read secret '${secretId}' for '${providerName}': ${String(error)}`);
+  }
+  return null;
 }
 
 // Resolved once per container and reused. Only a successful resolution is
@@ -120,17 +100,9 @@ export async function resolveCredential(
 let cachedPat: string | null = null;
 
 /**
- * Resolve the PAT up front and cache it, while still inside the request context.
- *
- * Must be called before the handler's first `yield`. The request context that
- * backs AgentCore Identity's workload-token exchange is carried in
- * AsyncLocalStorage, and that scope does not survive an async-generator
- * suspension: once `process` has yielded once, it resumes on the consumer's
- * context, so any later resolveStoryblokPat() sees no workloadAccessToken and
- * fails with "workloadIdentityToken not provided and no context available".
- *
- * Tool calls happen mid-stream, long after the first yield, which is why
- * fetchAiBrandingGuidelines and aiTranslateStory cannot resolve it themselves.
+ * Resolve the PAT once per container at the start of a request and cache it,
+ * so the branding fetch and every ai_translate_story call reuse one Secrets
+ * Manager read instead of making their own.
  */
 export async function primeStoryblokPat(): Promise<void> {
   if (cachedPat === null) {
@@ -144,11 +116,9 @@ export async function primeStoryblokPat(): Promise<void> {
 /**
  * Resolve the Storyblok Personal Access Token from AWS, never from source.
  *
- * Used by tools that call Storyblok's REST API directly rather than through the
- * Gateway MCP connection -- e.g. aiTranslateStory and fetchAiBrandingGuidelines,
- * which talk to Storyblok's Management API outside of MCP entirely. Those run
- * mid-stream, so they get the value primeStoryblokPat() cached during the
- * request; the direct call below is the local-dev / env-var path.
+ * Used only by the two calls the MCP server doesn't expose, AI branding and
+ * ai_translate_story. Returns the value primeStoryblokPat() cached, or resolves
+ * it now if nothing is cached yet (the verify script's path).
  */
 export async function resolveStoryblokPat(): Promise<string | null> {
   if (cachedPat !== null) return cachedPat;

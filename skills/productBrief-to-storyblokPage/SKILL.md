@@ -1,219 +1,127 @@
 ---
 name: productBrief-to-storyblokPage
-description: Turn a product-launch brief into a Storyblok landing page — assemble approved components, localize into target markets, generate alt text and SEO metadata, and move the story into the pre-publish workflow stage for human review.
+description: Turn a product-launch brief into a Storyblok landing page — assemble approved components, localize into target markets, generate alt text and SEO metadata, and leave the story in the review stage for a human.
 ---
 
 # Product Brief → Storyblok Page
 
-## Space
+## What the harness owns, and what you own
 
-Every Storyblok tool call in this skill operates on **space_id `{{SPACE_ID}}`**, region **`{{REGION}}`**. Both are fixed for this deployment, resolved from its environment and substituted into this text before you ever see it — so the values above are already the answer. **Never ask the user for either, never guess, never leave either out.**
+The harness around you enforces this workflow's hard rules in code: it blocks publishing, allows only the review stage, rejects numeric ids in reference fields, blocks an `updateStory` that would drop content, and verifies the finished story itself. You don't need to police those. When a call comes back **"Blocked by the harness"**, read the reason, fix exactly that, and retry.
 
-Pass `space_id: {{SPACE_ID}}` on every call that takes it. When an operation's `describe` shows **no** `space_id` parameter, pass region `{{REGION}}` — do not stop to ask which region it is. General Storyblok tool guidance says to ask the user for a region in exactly that case; **that instruction does not apply inside this skill**, because the region is already known and stated here. Asking is a failed run, not a safe one.
+Your job is the part code can't do: reading the brief, choosing components, writing copy in the brand's voice, and shaping every field value correctly.
 
-Everything else about this space — which components exist, what fields they have, where stories live, which workflow stages are defined — **is discovered live in step 2, every run.** This skill deliberately contains no snapshot of the content model. The model changes without this skill changing, so anything remembered here would eventually be wrong in a way that's hard to notice. If you catch yourself about to use a component name, field name, folder id, or stage id that you did not read from a tool result *this run*, stop and go fetch it.
+The **Space context** section of your system prompt is this session's live read of the space: the `productPage` content model and every component it allows, the review stage, folders, and brand guidelines. It is the complete and only set of components and field names you may use. Don't re-fetch schemas or stages. The only things left to look up are specific to this brief: an existing page for the product, its assets, and related stories.
 
-Two facts are asserted here rather than discovered, because they are this deployment's policy and not its content model:
+## Flagging gaps
 
-- Stories this skill creates are of the **`productPage`** content type — the skill's subject. Everything *about* `productPage` (its whitelist, its fields, its SEO fields) still gets read live.
-- Every story this skill touches ends in the workflow stage named **`Reviewing`** — never any other stage. Its id is still read live, its name is not. See *The Reviewing stage is not a judgment call* below.
+Everywhere this skill says **flag** something, call the `flag_gap` tool with a message a reviewer can act on ("The brief lists no spec values, so the spec table is empty. Add them from the spec sheet."). Flag it the moment you find it. When the gap is about one field of one block, also pass that block's `_uid`, its `component`, and the `fieldname`, so the comment is pinned to that spot in the Visual Editor. For a story-level gap (brand guidelines unavailable, a locale not enabled), pass only the message.
 
-## Don't get stuck — finish all 7 steps before polishing anything
+The harness posts every flagged gap as a comment on the story after the run, so don't post comments yourself. Still list every gap in your final summary: the summary is what reaches Slack.
 
-A completed page in the review stage with an imperfect field beats a perfect field on a page that never gets there. If you're unsure of a field's exact shape, make one best-effort attempt, note the uncertainty in your final summary, and **move on immediately** — don't spend more than one extra tool call re-confirming something you're already unsure about. Every run must reach step 5 (SEO metadata), step 6 (confirm `Reviewing`) and step 7 (final summary) — a run that stops partway through with no summary is a failure even if the story it created looks fine.
+## Don't get stuck
 
-**A `200`/success response is not proof the operation did what you intended** — Storyblok's API can return success while silently no-op'ing (confirmed true for `ai_translate_language`; assume it could be true elsewhere). Before claiming something worked in your final summary, re-fetch and check the actual result. If you can't confirm it worked, say so plainly instead of reporting success — a summary that overclaims is worse than one that honestly flags a gap.
+A completed page in review with one imperfect field beats a perfect field on a page that never gets there. If you're unsure of a field's shape, make one best-effort attempt, note it in your summary, and move on. Every run reaches SEO metadata, the review stage, and a final summary.
 
 ## Storyblok field types you will meet
 
-These are properties of Storyblok's field *types*, not of any particular component, so they hold regardless of what the live schema turns out to contain. Use the live schema to learn which of a component's fields are which type, then shape the value accordingly.
+The Space context tells you each field's type. Shape its value by type:
 
-**`richtext` fields are ProseMirror doc objects, not plain strings** — e.g. `{"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "your copy here"}]}]}`. Never pass a bare string to a richtext field. Note that a field being *named* something like `description` tells you nothing — on one component it may be richtext, on another plain text. Check the live schema per component.
+**`richtext`** is a ProseMirror doc object, never a bare string: `{"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "your copy here"}]}]}`. A field's name tells you nothing about its type; `description` is richtext on `hero` and plain text on `emailSignup`.
 
-**`asset` / `multiasset` fields are full objects, never a bare `{"id": ...}`.** `listAssets` returns `id`, `filename`, `alt`, `title`, `copyright`, `focus` — pass the complete object, plus `"fieldtype": "asset"`. `filename` is the actual CDN URL the live frontend renders as the `<img>` src; omit it and the image is broken on the real site, not merely missing. A `multiasset` value is an array of such complete objects. This applies to placeholder assets too — a placeholder is still a real asset id you found via `listAssets`, so it still needs its full object.
+**`asset` / `multiasset`** take the full object from `listAssets`, plus `"fieldtype": "asset"`. `filename` is the CDN URL the frontend renders as the `<img>` src, so without it the image is broken on the live site. A `multiasset` is an array of these.
 
 ```json
 {
   "id": 123456789,
   "filename": "https://a-<region>.storyblok.com/f/<space>/<dims>/<hash>/<file>.jpg",
-  "alt": "Descriptive alt text you wrote in step 5",
+  "alt": "Descriptive alt text you wrote",
   "title": "", "copyright": "", "focus": "", "fieldtype": "asset"
 }
 ```
 
-**`table` fields** need a `thead`/`tbody` structure, each cell its own object — not a flat key/value map:
+**`table`** needs `thead`/`tbody`, each cell its own object:
 
 ```json
 {
-  "thead": [
-    {"_uid": "h1", "value": "<column heading>", "component": "_table_head"}
-  ],
-  "tbody": [
-    {"_uid": "r1", "component": "_table_row",
-     "body": [{"_uid": "c1", "value": "<cell value>", "component": "_table_col"}]}
-  ]
+  "thead": [{"_uid": "h1", "value": "<column heading>", "component": "_table_head"}],
+  "tbody": [{"_uid": "r1", "component": "_table_row",
+             "body": [{"_uid": "c1", "value": "<cell value>", "component": "_table_col"}]}]
 }
 ```
-If the brief gives you no real values for a table (e.g. it references a spec-sheet PDF without listing numbers), leaving `thead`/`tbody` empty is fine — flag it in your final summary.
 
-**`bloks` fields** hold an array of nested component objects. Each entry needs its own `component` name and `_uid`. Which components an individual `bloks` field accepts is itself a live fact — read that field's `component_whitelist` from the schema, exactly as you do for the root `body` field.
+If the brief gives no real values for a table, leave `thead`/`tbody` empty and flag it.
 
-**Story-reference fields hold story `uuid` strings, never numeric story ids.** These are the fields whose schema type is `options`/`option` with `source: "internal_stories"` (a "Reference"/"Multi-Reference" field in the UI) — e.g. a `products` field listing related products. Storyblok resolves the reference by uuid; a numeric id in that array silently resolves to nothing, so the field looks populated in the API response while the frontend renders an empty list.
+**`bloks`** holds an array of nested components, each with its own `component` and `_uid`, drawn only from that field's `allows:` list.
 
-```json
-// wrong — these are story ids
-"products": ["221143137047892", "221140279162191"]
+**Story references** (marked `story uuids[]` or `one story uuid` in the Space context) hold story **uuids**, never numeric ids. The Space context gives each one's folder and content type, so scope your search there. Every story carries both `id` and `uuid` side by side; the moment you match a story, keep its uuid and drop its id. `multilink` fields are different again: a link object with the uuid under `id` and `"linktype": "story"`.
 
-// right — story uuids
-"products": ["af89ca3b-c7c3-4298-991e-03c00f15e18b", "6c1e0f2d-40aa-4c8e-b3a1-9f77b2d5e014"]
-```
+**Localized values** sit beside their default-language field as `<field>__i18n__<lang>` (for example `meta_title__i18n__de`), never as a separate story. Only translatable fields get one; `_uid`, `component`, links, assets, and uuids never do.
 
-Every story object carries **both** `id` and `uuid`, and they sit next to each other in the same response — that adjacency is exactly why this goes wrong. The listing that finds the story is also the listing that hands you the wrong value first. Ask for `uuid` in `fields`, and the moment you match a story, write down its uuid and **discard its id** — don't carry both forward to the payload-building step and decide between them later, because by then they're two plausible-looking numbers in your notes.
+## Writes
 
-**Check the shape before you send.** A uuid is 36 characters, `8-4-4-4-12` hex with dashes (`af89ca3b-c7c3-4298-991e-03c00f15e18b`). An id is bare digits (`221143137047892`). Before any `createStory`/`updateStory`, look at every value in every story-reference field: **if it is all digits, it is an id and the write is wrong** — stop and go get the uuid. This check costs nothing and catches the mistake every time, so run it every time, including on update runs where you're only touching one field.
+**`updateStory` replaces `story.content` in full.** Immediately before building an update, call `getStoryById` fresh, change only what you intend to on that copy, and send the whole object. (The harness blocks an update that would shrink `body` or drop a field, so a stale copy costs you a retry.)
 
-Never derive, shorten, or invent a uuid, and never fall back to the id because the uuid wasn't in the response — go re-read the story. If you can't resolve a referenced story at all, leave the entry out and flag it rather than writing an id in its place.
+**Create path:** `createStory` under the products folder from the Space context, with `content.component` set to `productPage`. **Then immediately call `createWorkflowStageChange` with the review stage id from the Space context**, before localizing or anything else, so the page never sits outside review while you work.
 
-**The field's own schema tells you where its stories live.** A story-reference field carries `folder_slug` (e.g. `"products/"`) and `filter_content_type` (e.g. `["productPage"]`) — that's the exact folder and content type the field accepts, straight from the live schema. Scope your search with those rather than guessing where to look. A story that fails the field's `filter_content_type` is not a valid value for it, however well its name matches.
+**Update path:** `updateStory` on the existing story. If it isn't in the review stage, move it there the same way.
 
-Single-reference fields (`option`, same `internal_stories` source) take one uuid string, not an array — the same shape check applies. `multilink` fields are a different type again — a link object, with the uuid under `id` plus `"linktype": "story"`, so a bare digit string is wrong there too. Read the field's real type from the live schema before shaping the value.
-
-**Localized values sit beside their default-language field**, same field name plus `__i18n__<lang>` (e.g. `description__i18n__de`) — never as a separate translated story. Only fields with actual translatable content get one; `_uid`, `component`, link objects, asset objects, and story-reference uuids never do — a translated uuid is a broken reference.
-
-## The Reviewing stage is not a judgment call
-
-**Every story goes into the stage named `Reviewing`, and gets there immediately after it is created — before localizing, before metadata, before anything else.** A story must never sit outside that stage while this skill is still working on it.
-
-This has gone wrong in a way worth naming. A run picked a stage called "Ready to Publish" because the name sounded like the end of the workflow. That stage permits publishing, and the story went live without a human ever seeing it. Two rules follow, and neither bends:
-
-1. **Match the stage name `Reviewing` exactly.** Read `listWorkflowStages` and take the stage whose name is `Reviewing`. Not the last stage in the list, not the highest `position`, not the one whose name sounds furthest along. "Ready to Publish", "Approved", "Done" and anything like them are **wrong**, however sensible they look next to a finished page.
-2. **Never choose a stage that permits publishing.** If your candidate has `allow_publish: true` or `allow_admin_publish: true`, it is not the review stage — the whole point of this step is that a human still has to act. Check those two flags on the stage you picked before you use its id.
-
-If there is genuinely no stage named `Reviewing`, do not substitute a publishing-capable stage. Pick the closest non-publishing stage, use it, and **say plainly in your final summary that `Reviewing` was missing and which stage you used instead**.
-
-**Never publish, by any route.** Don't call a publish operation, don't pass `publish: true` to `createStory` or `updateStory`, don't move to a stage that auto-publishes. This agent does not have publish rights and must not work around not having them. If you notice a story you touched has come out published, say so prominently in your final summary.
-
-## SEO metadata is required output, not a finishing touch
-
-**A page without SEO metadata is an incomplete run**, even if every other field is perfect. A run has shipped pages with `meta_title` and `meta_description` left as empty strings, which is the failure this section exists to stop.
-
-- Write every SEO/meta field `productPage`'s live schema reports — in this space that means a meta title, a meta description and a social share image, but read the real field names from the schema rather than assuming those.
-- **Write them in every target locale**, using the `__i18n__<lang>` convention, not just the default language. These fields are `translatable`, so they take localized values like any other copy.
-- **An empty string is not a written field.** If you set a value and it comes back `""`, it did not take — fix it and re-check.
-- The social share image is an `asset` field, so it needs a complete asset object (see *Storyblok field types*), not `{"id": null}`. Reuse the hero or another real image you already resolved.
-- Follow the brand guidelines' terminology rules here exactly as in body copy, and respect any length guidance the field's own `description` gives.
-- If the brief genuinely does not support a field, say so in the summary — but write the fields you *can*, which is nearly always all of them.
-
-## The destructive-overwrite rule
-
-**`updateStory` replaces `story.content` in full, and this has actually destroyed a story's body in production** — a run once left a story with `content: {"component": "page"}` and no `body` at all, because the localization step sent incomplete content. This is not hypothetical. Follow this exactly, every time you call `updateStory` for any reason:
-
-1. **Immediately before building the payload**, call `getStoryById` fresh — do not reuse a content object you fetched earlier, even a few tool calls ago. Use exactly what comes back.
-2. Take that fetched `content` object whole, modify only the specific thing you intend to change, and send that complete object back as `story.content`. Never send a partial object, never send just `{"component": "..."}`, never omit `body`.
-3. **After the call returns, re-fetch and confirm `content.body` is present with the same number of blocks as before.** If `body` is missing, empty, or shorter than expected, you have destroyed the page — stop immediately, do not proceed to further locales or steps, and say so plainly in your final summary.
+After each write, the harness appends a **readback** to the tool result: body block count, stage, published flag, SEO status per locale, and reference shapes. Use it to decide what's left. Don't re-fetch just to confirm a write.
 
 ## Localizing
 
-There is no query-param shortcut on `updateStory` — `ai_translate_language` as a bare `updateStory` param does NOT work (confirmed: returns HTTP 200 but never translates). The mechanism that does work:
+Call `ai_translate_story` with the story id and target `lang`, once per locale, after the story exists. It waits for Storyblok's translation job and reports how many `__i18n__<lang>` fields landed; trust that count over any progress number. There is no follow-up `updateStory` to make. (`ai_translate_language` as an `updateStory` param returns 200 and translates nothing.)
 
-1. Call the `ai_translate_story` tool with the story's id and target `lang` code. It triggers Storyblok's AI-translate job **and waits for it to finish** — you don't poll anything yourself. Storyblok saves the translated content directly onto the story; **there is no follow-up `updateStory` to make.**
-2. After it returns success, fetch the story fresh (plain `getStoryById`, no `?language=` param — it doesn't reliably surface these fields) and look for `__i18n__<lang>` keys. Confirm it's real translated text, not a copy of the default-language value, before reporting that locale done.
-3. If the tool reports a timeout or that the job vanished before 100%, don't assume it worked — check for `__i18n__` fields anyway; if absent, report the locale failed rather than guessing.
+Storyblok's AI translation doesn't know the brand's voice. After each locale, spot-check the translated copy against the brand guidelines and fix wording that reads off, with a fresh-copy `updateStory`. If a locale isn't enabled on the space (see the languages line in the Space context), flag it rather than skipping it silently.
+
+## SEO metadata
+
+Write every SEO field listed in the Space context, in the default language **and in every target locale** for the translatable ones. An empty string is not a written field. The share image is an asset field, so reuse the hero or another real image you already resolved, as a complete asset object. Respect the length guidance in each field's description, and apply the brand's terminology rules here as strictly as in body copy.
 
 ## On invocation
 
-The input is whatever the caller pasted — a real brief, a fragment, or something unrelated. Before doing anything else:
+The input is whatever the caller pasted. Before anything else:
 
-1. Check whether it's plausibly a product-launch brief: does it name an actual product, and carry at least some of target audience, benefits/value proposition, or launch timing?
-2. If it passes, **proceed through the full workflow autonomously** — don't pause for confirmation between steps, don't ask which components to use, don't ask for the space id.
-3. If it clearly isn't a product brief, say so plainly and stop rather than guessing at what to build.
+1. Check it's plausibly a product-launch brief: it names a product and carries at least some of audience, benefits, or launch timing.
+2. If it passes, **proceed through the whole workflow autonomously.** Don't pause for confirmation or ask for the space id.
+3. If it clearly isn't a brief, say so and stop.
 
 ## What a product brief looks like
 
-Briefs arrive as free-form text or a doc export — no fixed schema — but consistently carry the same handful of facts. Look for these regardless of formatting or order:
+Briefs are free-form, but they carry the same handful of facts:
 
 - **Product name / working title**
-- **Launch date(s)** — projected launch, plus a separate comms/announcement date if given
-- **Target audience** — concrete enough to inform tone, not just a demographic label
-- **Core benefits / value proposition** — the 2-4 things being sold ("what we're selling / why it matters / the payoff")
-- **Target markets or locales** — which countries/languages this page needs
-- **Other products this one should link to** — named in prose, never in a labelled field. A brief mentions them because a human reading it would know to cross-link: a predecessor or later generation, a sibling in the same line or family, a bundled or companion item, an accessory, a variant it replaces or sits alongside. The wording differs every time ("the second generation of X", "stays on sale while stock lasts", "pairs with", "the rest of the Y range") and so does the product category — read for the relationship, not for a phrase. Step 2.7 resolves them to stories; step 3 places them.
-- **Assets referenced** — photography, video, spec sheets; note what's referenced even if not attached, so the page can flag missing assets rather than fabricate them
-- **Success metrics** (optional) — context for what the page should emphasize, not something the page displays
+- **Launch date(s)**: projected launch, plus a separate announcement date if given
+- **Target audience**: concrete enough to inform tone
+- **Core benefits / value proposition**: the two to four things being sold
+- **Target markets or locales**
+- **Other products this one should link to**: named in prose, never in a labelled field ("the second generation of X", "pairs with", "the rest of the Y range"). Read for the relationship, not a phrase.
+- **Assets referenced**: photography, video, spec sheets, even if not attached, so the page can flag missing assets rather than fabricate them
+- **Success metrics** (optional): context for emphasis, not something the page displays
 
 ## Write in the brand's voice, not the brief's
 
-**The brief is source material, not copy.** It tells you *what is true* about the product — benefits, specs, audience, dates, what ships in the box. It does not tell you how to say any of it, and its own phrasing is internal marketing shorthand written for colleagues, not customers.
+**The brief is source material, not copy.** It tells you what is true: benefits, specs, audience, dates. It doesn't tell you how to say it; its phrasing is internal shorthand.
 
-Every word that lands on the page is drafted by you, from the brief's facts, in the voice the `brand-guidelines` skill returned this run. That means:
-
-- **Never paste brief text straight onto the page.** Bullet fragments like "Dual-density foam midsole — cushioned on descents, stable on climbs" are notes. Rewrite them as customer-facing copy that follows the live tone, writing-style, and formatting rules.
-- **Apply the terminology rules.** Preferred phrasings, words to avoid, and words never to use all apply to body copy, headings, alt text, and SEO metadata alike.
-- **Keep every fact verifiable.** Rewriting changes the wording, never the substance — don't round a number, drop a unit, soften a qualifier, or add a claim the brief doesn't support. If the brief gives a figure with a unit or a certification, carry it through exactly.
-- **Don't invent what isn't there.** If the brief is silent on something a component wants, leave it empty and flag it rather than writing plausible filler.
-- **If the guidelines fetch failed**, follow the fallback in `brand-guidelines`: neutral factual copy, and flag in your summary that everything needs a human voice pass.
+- **Never paste brief text onto the page.** Rewrite bullet fragments as customer-facing copy that follows the tone, writing-style, and formatting rules in the brand guidelines.
+- **Apply the terminology rules** (preferred, avoid, never) to body copy, headings, alt text, and SEO alike.
+- **Keep every fact verifiable.** Don't round a number, drop a unit, soften a qualifier, or add a claim the brief doesn't support.
+- **Don't invent what isn't there.** If the brief is silent on something a component wants, leave it empty and flag it.
+- **If the Space context says the guidelines couldn't be fetched**, follow the `brand-guidelines` skill's fallback.
 
 ## Workflow
 
-1. **Parse the brief.** Extract the fields above. If something this workflow depends on is missing (target markets, core benefits, referenced assets), note the gap explicitly rather than inventing content — flag it in the final summary. Write down the other products the brief names, in the brief's own words, as candidates for step 2.7 to resolve.
+1. **Parse the brief.** Extract the fields above. Note what's missing rather than inventing it. Write down the other products it names, in its own words.
 
-2. **Discover the live content model and everything else you need.** This read-only pass is where every structural fact comes from. Nothing in this skill substitutes for it.
+2. **Look up what's specific to this brief.** Schemas, stages, folders, and guidelines are already in the Space context.
+   1. **Existing page?** Search the products folder for a story matching this product. If one exists, this run is an **update**: fetch it and change only what the brief makes new or different. Otherwise it's a **create**.
+   2. **Assets.** When the brief says an asset lives in the DAM under a folder name, `listAssetFolders`, fuzzy-match the name, then `listAssets` with `in_folder`. Pick by filename where it's obvious. Fall back to a placeholder only if nothing matches, and say so.
+   3. **Related products and other references.** For each story-reference field you'll fill, list that field's folder and content type once (asking for `name`, `slug`, `uuid`), then match the brief's names against it, allowing for shorthand (a generation as a word or a digit, a first generation with no number, a dropped line prefix). Record only `name → uuid`. Resolve what you can, flag what you can't, never guess between two candidates, and never reference this run's own story. If the referenced stories don't exist yet, leave the field empty and flag it.
 
-   1. **Fetch the `productPage` schema, then the schema of every component it allows.** Look up `productPage` (e.g. `search` components for it, then `getComponent`) and read its `body` field's `component_whitelist`. **That list is the complete and only set of components you may use this run.** Then fetch each whitelisted component's own schema to learn its real field names and types.
+3. **Write the page.** Build the `productPage` story from the Space context's components, matching each part of the brief to a component by its real purpose: a hero-like component for the value proposition, card groups for benefits, a gallery for photography, a table for specs, a signup for a waitlist, a button for a referenced PDF. If nothing fits, skip that content and flag it; don't stretch an unrelated component. Put related-product uuids in whichever reference field points at product stories. If the brief says where the links go or what to call the section, honor it, rewriting the title in the brand's voice. Then create or update, and move the story to the review stage (see **Writes**).
 
-      Build yourself a field map from these results and work only from it. If a component's schema fetch fails, do not guess its fields from its name — skip that component and flag it in your final summary. If a whitelisted component contains a nested `bloks` field, read that field's own `component_whitelist` too.
+4. **Localize** into each target market (see **Localizing**). On an update, skip locales whose fields didn't change.
 
-      Also read `productPage`'s remaining fields here — its SEO/meta fields (whatever they're actually called in this space) are what step 5 writes to.
+5. **Metadata.** Alt text for every new image, and every SEO field in every locale (see **SEO metadata**). Check the readback for anything still empty.
 
-   2. **Resolve where stories live.** Find the folder these product stories belong in — list stories/folders and match on a folder whose name indicates products. Use the id you get back as `parent_id`. If you can't find one, create at the space root and flag it.
-
-   3. **Resolve the `Reviewing` stage id.** Call `listWorkflowStages` and take the stage whose name is exactly `Reviewing`. Confirm it has `allow_publish: false` and `allow_admin_publish: false` before using it. You need this id in step 3, not just at the end — the story enters this stage the moment it exists. See *The Reviewing stage is not a judgment call*.
-
-   4. **Check whether this product already has a page.** Search stories under the folder from 2.2 for one matching this brief's product.
-      - **If one exists, this run is an update.** Fetch its full current content and compare against the brief: identify only what's genuinely new or different. Leave everything else alone in step 3 — a targeted edit, not a re-draft.
-      - **If none exists, this run is a create.**
-
-   5. **Fetch brand guidelines.** Follow the `brand-guidelines` skill, once per run, create or update.
-
-   6. **Locate real assets.** When the brief says an asset lives "in [Assets/DAM] under '<folder name>'", that's a real Storyblok asset folder — find it, don't guess:
-      1. `listAssetFolders` and fuzzy-match the brief's reference against the folder names returned.
-      2. `listAssets` with `in_folder: <that folder's id>` for the real asset objects.
-      3. Pick sensibly by filename where it's obvious — don't grab the first N arbitrarily.
-      4. These assets likely have empty `alt` already (check) — you still write real alt text in step 5.
-      5. Only fall back to a placeholder if you genuinely found no matching folder or no assets — and say so explicitly.
-
-   7. **Resolve related products to story uuids.** For each product the brief named in step 1, find its story and read its `uuid`:
-      1. Scope the search with the reference field's own `folder_slug` and `filter_content_type` from 2.1 — list the stories in that folder of that content type (`listStories` with `folder_slug`/`starts_with` and `content_type`, asking for `name`, `slug`, `uuid`). One listing covers every candidate, so don't search per product. If a named product isn't in that listing, widen once to a space-wide search by name; if it turns up outside the field's folder or content type, it is not a valid value for that field — flag it rather than forcing it in.
-      2. Match each candidate against that listing on the product name, allowing for the brief's shorthand: a generation number written as a word or a digit, a first generation written without its number at all, a name with the line prefix dropped, a trailing descriptor the story title omits. Match on the product, not on string equality.
-      3. **Record only `name → uuid`.** Write the pair down that way and drop the `id` from your notes entirely — the id has no use anywhere in the rest of this run, and the only reason it ever reaches a reference field is that someone kept it around. See *Story-reference fields* above for the shape check.
-      4. **One ambiguous or missing match doesn't sink the rest.** Resolve the ones you can, drop the ones you can't, and flag each unresolved name in the final summary with what you searched for. Never guess between two plausible stories, and never point a reference at this run's own story.
-      5. If the brief names no other products, or none of them exist in the space yet, the reference field stays empty — that's a normal outcome, not a failure.
-
-   8. **Resolve every other story-reference field the same way.** Related products is the obvious one, but it is not the only reference field you'll meet — a variant's colorway, a testimonial's customer profile, and anything else the schemas in 2.1 reported as `options`/`option` with `source: "internal_stories"` all take uuids and all need resolving here, in this read pass, against their own `folder_slug`/`filter_content_type`. The brief flags these in prose too ("merchandising maintains the colorway list centrally", named customers who agreed to be quoted). Where the referenced stories don't exist yet, leave the field empty and flag it — don't fall back to writing the value inline in a text field, and never write an id.
-
-   After this pass, everything else is drafting (no tool calls) followed by writes. The only further reads are the fresh-fetch-before-write re-checks required around `updateStory`.
-
-3. **Write the page.** Build the `productPage` story using **only** components from step 2.1's whitelist, with **only** the field names their live schemas reported.
-
-   Map the brief onto whatever that whitelist actually offers, by matching intent to each component's real purpose and fields — a hero-like component for the value proposition, a repeatable card-like group for core benefits, a gallery-like component for photography, a table-like component for structured specs, a signup-like component for a waitlist ask, a link/button component for a referenced PDF. **If the whitelist has no reasonable home for something in the brief, skip that content and flag it** — do not invent a component, and do not stretch an unrelated one to fit. Equally, if the whitelist offers something useful the brief didn't anticipate, using it is fine.
-
-   **Related products.** Put the uuids from step 2.7 into whichever component and field the live whitelist actually offers for cross-linking products — a component whose purpose is related/recommended products, or a story-reference field on one you're already using. Identify it by what its schema says it is (`options` with `source: "internal_stories"`, pointing at product stories), not by hoping for a particular name; the field could be `products`, `related`, `related_products` or anything else, and the component holding it could equally be named for the section the brief describes. If the whitelist has no such field anywhere, skip the cross-linking and flag it rather than writing the product names into body copy as a substitute.
-
-   The brief may also say where the links belong and what to call the section ("a 'More from the Aurora line' section near the bottom"). Honor placement when the component's position is yours to choose, and treat a quoted section title as the brief's intent for a heading field — rewritten in the brand's voice like any other copy, not pasted.
-
-   **Before you send the payload, run the uuid shape check.** Walk every story-reference field in the content you just built and confirm each value is `8-4-4-4-12` hex, not bare digits. A digits-only value means an id slipped through from step 2.7 — fix it before writing, not after.
-
-   - **Create path:** `createStory` under the folder from step 2.2, with `content.component` set to `productPage`. Never pass `publish: true`. **Then immediately call `createWorkflowStageChange` with the `Reviewing` id from step 2.3** — that call is part of creating the story, not a later step. Do it before localizing, before metadata, before anything else, so the page is never sitting outside review while you work on it.
-   - **Update path:** `updateStory` on the existing story id from step 2.4 — the destructive-overwrite rule above is mandatory here, not optional. Never pass `publish: true`. If the story is not already in `Reviewing`, move it there now, the same way.
-
-   **After the write, re-fetch the story and read the reference fields back.** A `200` is not proof (see above). Confirm each one holds the uuids you intended — same count, same values, uuid-shaped. If any came back as digits, empty, or short, fix it now and say so in the final summary rather than reporting the links as done.
-
-4. **Localize.** For each target market from the brief, run the localization procedure above — once per locale, after the story exists. On an update run, skip locales whose relevant fields didn't change; do translate any newly enabled locale or one whose changed fields need it. After each, spot-check tone against the brand guidelines and adjust. If a locale isn't enabled on the space, flag it rather than silently skipping.
-
-5. **Generate metadata — required, every run.** Alt text for every new image, plus every SEO/meta field `productPage`'s live schema reported, in the default language **and in every target locale**. See *SEO metadata is required output*. On an update run, only touch metadata tied to what actually changed — but if a required SEO field is empty, it counts as changed and you fill it.
-
-   **Then re-fetch the story and read the SEO fields back.** If any is `""`, missing, or still a placeholder, it did not take — fix it before step 6. Reporting a page as done with empty metadata is a failed run.
-
-6. **Confirm the story is still in `Reviewing`.** It was put there in step 3; this is the check that it stayed there and that nothing since moved or published it. Re-fetch the story, read back `stage.workflow_stage_id`, and confirm it equals the `Reviewing` id from step 2.3 and that `published` is not true. If it drifted, move it back with `createWorkflowStageChange` and say so in the summary. Never publish, and never move it onward to a publishing-capable stage — a human does that from the Visual Editor.
-
-7. **Stop.** Summarize what was built or changed (say explicitly whether this was a create or an update, and if an update, exactly what changed), which components the live whitelist offered and which you used, which related products you linked and which named products you couldn't resolve, which locales completed, **the exact SEO values you wrote per locale and the stage name the story ended in**, and every gap flagged along the way — including any component whose schema fetch failed. A human reviews and publishes from the Visual Editor.
+6. **Summarize.** Say whether this was a create or an update (and exactly what changed), which components you used, which related products you linked and which names you couldn't resolve, which locales completed, the exact SEO values you wrote per locale, and every gap you flagged, including anything listed under "Flag these in your summary" in the Space context. End with the `NOTES:` line. A human reviews and publishes from the Visual Editor.

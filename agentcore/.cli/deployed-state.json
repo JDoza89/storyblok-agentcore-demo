@@ -51,7 +51,7 @@
         },
         "stackName": "AgentCore-reInventDemo-default",
         "identityKmsKeyArn": "arn:aws:kms:us-east-1:485530831632:key/a93a058a-1d3b-4529-b023-d1c207ed049a",
-        "deployHash": "d6c251e210d6409d"
+        "deployHash": "67d5db094f7bd556"
       }
     }
   }
