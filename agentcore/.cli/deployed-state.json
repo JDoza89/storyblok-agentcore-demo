@@ -47,11 +47,16 @@
             "policyId": "allowScopedOperations-8tounkuf4a",
             "policyArn": "arn:aws:bedrock-agentcore:us-east-1:485530831632:policy-engine/reInventDemo_reInventDemoPolicyEngine-v8ggrec_w2/policy/allowScopedOperations-8tounkuf4a",
             "engineName": "reInventDemoPolicyEngine"
+          },
+          "reInventDemoPolicyEngine/allowStoryblokAiTools": {
+            "policyId": "allowStoryblokAiTools-vsijdvjgir",
+            "policyArn": "arn:aws:bedrock-agentcore:us-east-1:485530831632:policy-engine/reInventDemo_reInventDemoPolicyEngine-v8ggrec_w2/policy/allowStoryblokAiTools-vsijdvjgir",
+            "engineName": "reInventDemoPolicyEngine"
           }
         },
         "stackName": "AgentCore-reInventDemo-default",
         "identityKmsKeyArn": "arn:aws:kms:us-east-1:485530831632:key/a93a058a-1d3b-4529-b023-d1c207ed049a",
-        "deployHash": "67d5db094f7bd556"
+        "deployHash": "5156808684649652"
       }
     }
   }

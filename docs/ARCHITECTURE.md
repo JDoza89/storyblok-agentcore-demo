@@ -14,13 +14,13 @@ caller (agentcore invoke, FlowMotion HTTP node)
   ▼
 AgentCore Runtime: storyblokAgentGatewayTS (Strands TypeScript agent, Bedrock Claude)
   │                                   │
-  │  MCP over SigV4                   │  Management API with PAT
-  │  (model + harness reads)          │  (AI branding, AI translate only)
-  ▼                                   ▼
-reInventDemoGateway ── Cedar ──▶ SBMCP target ──▶ Storyblok MCP server
-                                                   │
-S3 skills bucket (read at session start)           ▼
-Secrets Manager (PAT)                         Storyblok space
+  │  MCP over SigV4 (model calls and harness calls)
+  ▼
+reInventDemoGateway ── Cedar ─┬─▶ SBMCP target  ──▶ Storyblok MCP server ──┐
+                              └─▶ SBMAPI target ──▶ Management API ────────┤
+                                  (AI branding, AI translate)             ▼
+S3 skills bucket (read at session start)                           Storyblok space
+AgentCore Identity (PAT, attached by the Gateway)
 ```
 
 The pieces:
@@ -31,7 +31,7 @@ The pieces:
 | `reInventDemoGateway` | AgentCore Gateway with the Storyblok MCP server as target `SBMCP` | Gives the agent Storyblok's MCP tools as `SBMCP___search`, `SBMCP___describe`, `SBMCP___execute_readonly`, and `SBMCP___execute_mutating`, behind IAM auth and a policy engine. |
 | `reInventDemoPolicyEngine` | Cedar policies in `ENFORCE` mode | Allows discovery tools unconditionally, allows exactly 13 named Storyblok operations, and forbids `execute_destructive` outright. |
 | Skills bucket | `s3://storyblok-agentcore-skills-485530831632` | Holds the agent's instructions as Agent Skills, so an instruction change is an upload, not a redeploy. |
-| Storyblok PAT | Secrets Manager secret behind the `storyblok-mcp-pat` credential | Used only for AI branding and AI translate, the two Storyblok calls the MCP server doesn't expose. |
+| Storyblok PAT | The `storyblok-mcp-pat` credential in AgentCore Identity | Attached by the Gateway to both targets (`Bearer <PAT>` for SBMCP, the raw token for SBMAPI). The runtime never reads it. |
 | `ai_translate_story`, AI branding fetch | `storyblok_kit/tools/ai-translate.ts`, `storyblok_kit/ai-branding.ts` | Cover what the MCP server doesn't: waiting for an AI-translate background job, and reading the space's AI Branding settings. v1 exposed the branding fetch as a tool; v2 calls it from the harness at session start. |
 
 💡 The allowlist lives in two places. `agentcore/policies/*.cedar` holds the readable source, but the deploy reads the inline copy in `agentcore/agentcore.json`, with `sourceFile` acting only as a pointer. Edit both, then read the live policy back after deploying.
@@ -85,10 +85,8 @@ Before streaming a turn, the handler snapshots the agent's messages. If the stre
 
 Two constraints from the environment shaped this layer:
 
-1. **SigV4 is hand-rolled** in `storyblok_kit/sigv4.ts`. The AgentCore Node packager marks `@aws-sdk/client-s3` as esbuild-external and doesn't copy it into the deployment zip, so importing it throws `MODULE_NOT_FOUND` on the first invocation. One signer backs the Gateway transport, S3, and Secrets Manager.
-2. **The PAT comes straight from Secrets Manager.** The documented path, `withApiKey()` falling back to the request's workload access token, can't work here. AgentCore only supplies that token from an inbound header, and SigV4 invocation doesn't send one. Minting one is refused. So the execution role reads the secret directly, and `resolveCredential` keeps AgentCore Identity as a fallback.
-
-The PAT is also primed before the handler's first `yield`. The request context lives in `AsyncLocalStorage`, and it doesn't survive an async-generator suspension, so tools running mid-stream couldn't resolve it themselves.
+1. **SigV4 is hand-rolled** in `storyblok_kit/sigv4.ts`. The AgentCore Node packager marks `@aws-sdk/client-s3` as esbuild-external and doesn't copy it into the deployment zip, so importing it throws `MODULE_NOT_FOUND` on the first invocation. One signer backs the Gateway transport and S3.
+2. **The runtime holds no Storyblok credential.** AgentCore Identity's `withApiKey()` needs a workload access token that SigV4 invocation never supplies, so the runtime couldn't resolve the PAT that way. Rather than reading the secret directly, every Storyblok call goes through the Gateway, whose targets attach the PAT themselves: the MCP server as `SBMCP`, and the Management API calls it doesn't expose (AI branding, AI translate) as the OpenAPI target `SBMAPI`.
 
 Space ID and region are plain environment variables. They aren't secrets, so running them through AgentCore Identity only added a round trip.
 
@@ -236,7 +234,7 @@ Run the agent on a brief, then point the script at the story it built. It prints
 ## Tradeoffs and limitations
 
 - **Cedar can't check parameters, so the hooks stay.** Moving the space-ID, publish-flag, and review-stage rules into Cedar `forbid` policies was tested against the live Gateway. The Gateway exposes top-level tool arguments like `operation` to Cedar, but not the nested `parameters` object: the space and publish rules never fired (a wrong space ID and `publish: true` both reached Storyblok), and the stage rule denied every stage change, including the one to `Reviewing`. The policies were rolled back within minutes. `SpaceIdGuard` and the `LaunchInvariants` parameter checks are the only enforcement for these rules, and Cedar stays the operation allowlist.
-- **Two calls still skip MCP.** AI branding and AI translate aren't exposed by the Storyblok MCP server, so they call the Management API directly with the PAT, and Cedar never sees them. Everything else, including every harness read (space context, the pre-update read, readbacks, and the verifier), goes through the Gateway. The harness reads use operations already on Cedar's readonly allowlist, plus `getSpace` for the enabled languages.
+- **Every Storyblok call goes through the Gateway.** AI branding and AI translate aren't exposed by the Storyblok MCP server, so their Management API endpoints are published as a second, OpenAPI target, `SBMAPI` (`agentcore/gateway-targets/`). Its tools take `space_id` as a top-level argument, so, unlike SBMCP's nested parameters, Cedar can check it: `allowStoryblokAiTools` permits them only for this space, and a wrong, missing, or string-typed `space_id` is denied (tested). SBMAPI is managed outside the CDK stack, like SBMCP, so spec changes are pushed with `update-sbmapi.sh`. Its tools are filtered out of the model's tool list, with a hook as a backstop, because the raw translate trigger would skip `ai_translate_story`'s per-story queue and wait. The Gateway reports a deleted background task as a generic tool error, so the poll treats an error as ambiguous and asks the story, giving up only after three in a row with no new translated fields.
 - **The prompt is bigger.** The field map and the branding JSON add tokens to every turn in exchange for fewer tool calls. The net effect on tokens and latency hasn't been measured yet.
 - **One repair turn.** A run that fails verification twice ends with the failures in `notes` instead of retrying.
 - **Locales are inferred.** The verifier checks the locales the agent passed to `ai_translate_story`. If the agent never translates a locale the brief asked for, the verifier doesn't know it was asked for. The model's summary is still where that gap shows up.
@@ -271,7 +269,7 @@ cd app/storyblokAgentGatewayTS
 npx tsx scripts/verify-story.ts <storyId> --locales de,ja
 ```
 
-For local development, run `npm run dev` in `app/storyblokAgentGatewayTS/`. The verify script needs `STORYBLOK_SPACE_ID`, `STORYBLOK_REGION`, and a PAT, either through `AGENTCORE_CREDENTIAL_STORYBLOK_MCP_PAT` or through `STORYBLOK_PAT_SECRET_ID` with AWS credentials that can read that secret.
+For local development, run `npm run dev` in `app/storyblokAgentGatewayTS/`. The verify script needs `AGENTCORE_GATEWAY_REINVENTDEMOGATEWAY_URL` (the gateway URL plus `/mcp`), `STORYBLOK_SPACE_ID`, and AWS credentials allowed to invoke the Gateway. No Storyblok token: the Gateway attaches it.
 
 To go back to v1, restore its code and skills from git, upload the two restored skill files to the bucket root, and deploy. The runtime keeps its ID:
 
@@ -289,7 +287,7 @@ Local checks against the live space:
 - The hook blocks a `publish` flag, a `publishStory` operation, the "Ready to Publish" stage ID, an update that drops `body`, an update that shrinks `body`, and a numeric ID in `relatedProducts.products`.
 - The hook allows a stage change to `Reviewing` and a full-content update, and fills in `space_id`.
 
-On the deployed runtime, a connectivity prompt (not a brief) starts a session end to end: the PAT resolves, the Space context loads, the skills sync from S3, and the harness writes `AGENT_RESULT` with `status: "unchanged"`. A full brief hasn't run through the deployed v2 yet, so there are no end-to-end numbers.
+On the deployed runtime, a connectivity prompt (not a brief) starts a session end to end with no Storyblok token in the runtime: the Space context loads through the Gateway (including AI branding via SBMAPI), the skills sync from S3, and the harness writes `AGENT_RESULT` with `status: "unchanged"`. A full brief hasn't run through the deployed v2 yet, so there are no end-to-end numbers.
 
 ## What's next?
 

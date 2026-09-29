@@ -1,7 +1,7 @@
 import { BeforeToolCallEvent, type Plugin } from '@strands-agents/sdk';
 import type { LocalAgent } from '@strands-agents/sdk';
 
-import { resolveStoryblokSpaceId } from '../credentials.js';
+import { resolveStoryblokSpaceId } from '../storyblok-config.js';
 
 /** Recursively search a tool call's input for a space_id that isn't ours. */
 function findMismatchedSpaceId(value: unknown, allowed: number | null): unknown {

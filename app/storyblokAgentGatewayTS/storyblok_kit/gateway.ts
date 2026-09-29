@@ -2,7 +2,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { McpError } from '@modelcontextprotocol/sdk/types.js';
 
-import { resolveStoryblokSpaceId } from './credentials.js';
+import { resolveStoryblokSpaceId } from './storyblok-config.js';
 import { createSigV4Fetch } from './sigv4.js';
 
 /**
@@ -51,23 +51,23 @@ function resultText(result: unknown): string {
   return content.map((block) => (block.type === 'text' ? (block.text ?? '') : '')).join('');
 }
 
-async function callOnce(tool: string, operation: string, args: Record<string, unknown>): Promise<unknown> {
+async function callOnce(tool: string, label: string, args: Record<string, unknown>): Promise<unknown> {
   const client = await connect();
   const result = await client.callTool({ name: tool, arguments: args });
   const text = resultText(result);
   if ((result as { isError?: boolean }).isError) {
-    throw new GatewayCallError(`${operation} failed through the Gateway: ${text}`);
+    throw new GatewayCallError(`${label} failed through the Gateway: ${text}`);
   }
   let body: unknown;
   try {
     body = JSON.parse(text) as unknown;
   } catch {
-    throw new GatewayCallError(`${operation} returned a non-JSON response: ${text.slice(0, 300)}`);
+    throw new GatewayCallError(`${label} returned a non-JSON response: ${text.slice(0, 300)}`);
   }
   // The Storyblok MCP server reports API failures as a successful tool result
   // carrying `{"success": false, ...}`, so check the body, not just isError.
   if ((body as { success?: unknown }).success === false) {
-    throw new GatewayCallError(`${operation} failed: ${text.slice(0, 300)}`);
+    throw new GatewayCallError(`${label} failed: ${text.slice(0, 300)}`);
   }
   return body;
 }
@@ -100,14 +100,28 @@ export async function callGateway<T>(options: {
     ...(fields ? { fields } : {}),
   };
 
-  let body: unknown;
+  const body = await callTool<unknown>(tool, args, { label: operation, retry: options.retry ?? false });
+  const record = body as { data?: unknown };
+  return (record.data !== undefined ? record.data : body) as T;
+}
+
+/**
+ * Call any Gateway tool with its own arguments and return the parsed body. For
+ * tools that take flat arguments, like the SBMAPI target's (`{ space_id }`),
+ * rather than SBMCP's `{ operation, parameters }`. Same retry rules as
+ * callGateway: reads may retry on a dropped connection, writes never do.
+ */
+export async function callTool<T>(
+  tool: string,
+  args: Record<string, unknown>,
+  options: { label?: string; retry?: boolean } = {},
+): Promise<T> {
+  const label = options.label ?? tool;
   try {
-    body = await callOnce(tool, operation, args);
+    return (await callOnce(tool, label, args)) as T;
   } catch (error) {
     if (!options.retry || error instanceof GatewayCallError || error instanceof McpError) throw error;
     connection = null;
-    body = await callOnce(tool, operation, args);
+    return (await callOnce(tool, label, args)) as T;
   }
-  const record = body as { data?: unknown };
-  return (record.data !== undefined ? record.data : body) as T;
 }

@@ -23,7 +23,10 @@ export function getReinventdemogatewayMcpClient(): McpClient | null {
   // No `prefix` here on purpose: the Gateway already namespaces its tools as
   // `{target}___{tool}` (e.g. SBMCP___search). Adding a client-side prefix on
   // top produced names unwieldy enough that the model avoided calling them.
-  return new McpClient({ transport });
+  // The SBMAPI target's tools (AI branding, AI translate) are the harness's to
+  // call, not the model's: ai_translate_story wraps the translate trigger with
+  // a per-story queue and a wait, and calling the raw tool would skip both.
+  return new McpClient({ transport, toolFilters: { rejected: [/^SBMAPI___/] } });
 }
 
 /** Returns MCP clients for all configured gateways. */

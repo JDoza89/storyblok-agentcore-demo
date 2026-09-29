@@ -10,11 +10,10 @@
  *
  * Reads go through the Gateway, so this needs
  * AGENTCORE_GATEWAY_REINVENTDEMOGATEWAY_URL (the gateway URL plus `/mcp`), AWS
- * credentials allowed to invoke it, and STORYBLOK_SPACE_ID. `--context` also
- * fetches AI branding directly, which needs AGENTCORE_CREDENTIAL_STORYBLOK_MCP_PAT
- * or STORYBLOK_PAT_SECRET_ID; without either, it shows the branding fallback.
+ * credentials allowed to invoke it, and STORYBLOK_SPACE_ID. No Storyblok token:
+ * the Gateway attaches it.
  */
-import { resolveStoryblokRegion, resolveStoryblokSpaceId } from '../storyblok_kit/credentials.js';
+import { resolveStoryblokRegion, resolveStoryblokSpaceId } from '../storyblok_kit/storyblok-config.js';
 import { RunTracker } from '../storyblok_kit/run-tracker.js';
 import { loadSpaceContext, renderSpaceContext } from '../storyblok_kit/space-context.js';
 import { failures, verifyStory } from '../storyblok_kit/verifier.js';

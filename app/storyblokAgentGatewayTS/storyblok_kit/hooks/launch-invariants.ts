@@ -151,6 +151,12 @@ export class LaunchInvariants implements Plugin {
       this.tracker.locales.add(input.lang);
       return null;
     }
+    // Backstop for the tool filter in mcp_client/client.ts: SBMAPI's tools are
+    // the harness's, and the raw translate trigger skips ai_translate_story's
+    // per-story queue and wait.
+    if (toolName.startsWith('SBMAPI___')) {
+      return `'${toolName}' is called by the harness, not the agent. To translate a story, use ai_translate_story.`;
+    }
     if (!STORYBLOK_EXECUTE.test(toolName) || !isObject(input)) return null;
 
     const operation = typeof input.operation === 'string' ? input.operation : '';

@@ -6,7 +6,7 @@ import { z } from 'zod';
 
 import { loadModel } from './model/load.js';
 import { getAllGatewayMcpClients } from './mcp_client/client.js';
-import { primeStoryblokPat, resolveStoryblokRegion, resolveStoryblokSpaceId } from './storyblok_kit/credentials.js';
+import { resolveStoryblokRegion, resolveStoryblokSpaceId } from './storyblok_kit/storyblok-config.js';
 import { LaunchInvariants } from './storyblok_kit/hooks/launch-invariants.js';
 import { SpaceIdGuard } from './storyblok_kit/hooks/space-guard.js';
 import { RunTracker, type Gap } from './storyblok_kit/run-tracker.js';
@@ -246,10 +246,6 @@ const app = new BedrockAgentCoreApp({
     requestSchema,
     async *process(payload, context) {
       context.log.info('Invoking Agent.....');
-
-      // Cache the PAT once per container. Session setup needs it for the AI
-      // branding rules, one of the two reads the MCP server doesn't cover.
-      await primeStoryblokPat();
 
       const sessionId = context?.sessionId ?? 'default-session';
       const { agent, ctx, tracker } = await getOrCreateSession(sessionId);

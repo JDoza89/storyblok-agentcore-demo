@@ -1,0 +1,170 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "Storyblok Management API (AI features)",
+    "version": "1.0.0",
+    "description": "The Storyblok Management API calls the Storyblok MCP server doesn't expose (AI branding, AI translate), published on the Gateway so Cedar authorizes them like every other call."
+  },
+  "servers": [
+    {
+      "url": "https://api-us.storyblok.com/v1"
+    }
+  ],
+  "paths": {
+    "/spaces/{space_id}/ai_branding_rules": {
+      "get": {
+        "operationId": "getAiBrandingRules",
+        "summary": "Get the space's AI Branding settings",
+        "description": "Returns the space's AI Branding settings: industry, audience, tone, writing style, terminology, and market notes.",
+        "parameters": [
+          {
+            "name": "space_id",
+            "in": "path",
+            "required": true,
+            "description": "Storyblok space ID",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The AI Branding settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ai_branding_rule": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/spaces/{space_id}/stories/{story_id}/ai_translate": {
+      "put": {
+        "operationId": "aiTranslateStory",
+        "summary": "Start an AI translation of a story into one language",
+        "description": "Starts a Storyblok AI-translate background job that writes <field>__i18n__<lang> values onto the story. Returns a background_task_id to poll.",
+        "parameters": [
+          {
+            "name": "space_id",
+            "in": "path",
+            "required": true,
+            "description": "Storyblok space ID",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "story_id",
+            "in": "path",
+            "required": true,
+            "description": "Numeric story ID",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "lang"
+                ],
+                "properties": {
+                  "lang": {
+                    "type": "string",
+                    "description": "Official language code, for example de or ja"
+                  },
+                  "overwrite": {
+                    "type": "boolean",
+                    "description": "Replace existing translated values for this language"
+                  },
+                  "code": {
+                    "type": "string",
+                    "description": "Custom language code from Space Settings, only when it differs from lang"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The job was started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "background_task_id": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/spaces/{space_id}/background_tasks/{task_id}": {
+      "get": {
+        "operationId": "getBackgroundTask",
+        "summary": "Get a background task's progress",
+        "description": "Returns a background task's progress (0-100). The task record is deleted when the job ends, so a 404 means finished or failed.",
+        "parameters": [
+          {
+            "name": "space_id",
+            "in": "path",
+            "required": true,
+            "description": "Storyblok space ID",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "description": "Background task ID",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The task",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "background_task": {
+                      "type": "object",
+                      "properties": {
+                        "progress": {
+                          "type": "number"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

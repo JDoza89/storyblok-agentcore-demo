@@ -22,10 +22,6 @@
         {
           "name": "STORYBLOK_REGION",
           "value": "us"
-        },
-        {
-          "name": "STORYBLOK_PAT_SECRET_ID",
-          "value": "arn:aws:secretsmanager:us-east-1:485530831632:secret:bedrock-agentcore-identity!default/apikey/storyblok-mcp-pat-f3eb6bf7-YRVsnj"
         }
       ],
       "networkMode": "PUBLIC",
@@ -116,6 +112,15 @@
           "description": "Exactly the readonly/mutating Storyblok operations this agent currently uses",
           "statement": "// Exactly the Storyblok operations this agent is currently allowed to run.\n//\n// To allow a new operation: add its exact name to the matching list\n// below (readonly or mutating) and redeploy -- nothing else in this\n// file needs to change.\n// To remove one: delete its line.\n//\n// This is intentionally the ONLY thing gating execute_readonly /\n// execute_mutating -- there is no other policy narrowing these two\n// actions, so an operation not listed here is denied by default.\npermit (\n    principal,\n    action in [\n        AgentCore::Action::\"SBMCP___execute_readonly\",\n        AgentCore::Action::\"SBMCP___execute_mutating\"\n    ],\n    resource == AgentCore::Gateway::\"arn:aws:bedrock-agentcore:us-east-1:485530831632:gateway/reinventdemo-reinventdemogateway-ianze4pdtu\"\n)\nwhen {\n    [\n        // -- readonly, via SBMCP___execute_readonly --\n        \"getStoryById\",\n        \"listStories\",\n        \"listAssetFolders\",\n        \"getComponent\",\n        \"listAssets\",\n        \"listWorkflowStages\",\n        \"listManagementComponents\",\n        \"getSpace\",\n\n        // -- mutating, via SBMCP___execute_mutating --\n        \"createStory\",\n        \"updateStory\",\n        \"updateAsset\",\n        \"createWorkflowStageChange\",\n        \"createDiscussionForStory\"\n    ].contains(context.input.operation)\n};",
           "sourceFile": "agentcore/policies/allow-scoped-operations.cedar",
+          "validationMode": "FAIL_ON_ANY_FINDINGS",
+          "enforcementMode": "ACTIVE",
+          "authorizationPhase": "INITIATE"
+        },
+        {
+          "name": "allowStoryblokAiTools",
+          "description": "SBMAPI tools (AI branding, AI translate) for this deployment's space only",
+          "statement": "// The Storyblok Management API calls the MCP server doesn't expose, published\n// on the SBMAPI target. Each is allowed only for this deployment's space.\n// SBMAPI's tools take space_id as a top-level argument (unlike SBMCP's nested\n// parameters), so Cedar can check it here. A permit condition fails closed:\n// if space_id is missing or different, no policy applies and the call is denied.\npermit (\n    principal,\n    action in [\n        AgentCore::Action::\"SBMAPI___getAiBrandingRules\",\n        AgentCore::Action::\"SBMAPI___aiTranslateStory\",\n        AgentCore::Action::\"SBMAPI___getBackgroundTask\"\n    ],\n    resource == AgentCore::Gateway::\"arn:aws:bedrock-agentcore:us-east-1:485530831632:gateway/reinventdemo-reinventdemogateway-ianze4pdtu\"\n)\nwhen {\n    context.input has space_id &&\n    context.input.space_id == 575814915634883\n};",
+          "sourceFile": "agentcore/policies/allow-storyblok-ai-tools.cedar",
           "validationMode": "FAIL_ON_ANY_FINDINGS",
           "enforcementMode": "ACTIVE",
           "authorizationPhase": "INITIATE"
