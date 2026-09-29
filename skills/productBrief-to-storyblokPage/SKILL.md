@@ -31,7 +31,8 @@ A completed page in review with placeholders and comments beats no page. If you'
 - SEO fields: a placeholder in the same form, in every locale, rather than an empty string.
 - Assets: a real asset from the space as a stand-in (see step 2.2), never an empty asset object.
 - Tables: one row whose cells are placeholders.
-- Story references, numbers, dates, and options: leave empty. There's no safe placeholder for a uuid, a price, or a launch date.
+- Links (`multilink`): a URL link to `#`, as `{"linktype": "url", "url": "#", "cached_url": "#", "fieldtype": "multilink"}`, never an empty link object. This covers any link the brief doesn't give, such as a button's destination or a CTA target.
+- Story references, numbers, dates, and options: leave empty. There's no safe placeholder for a uuid, a price, or a launch date. A story reference field holds uuids, so it never gets `#`; that's only for `multilink` fields.
 
 Every placeholder gets its own `flag_gap`, pinned to its block and field, so the reviewer finds each one in the Visual Editor.
 

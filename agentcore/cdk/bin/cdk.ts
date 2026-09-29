@@ -20,6 +20,49 @@ function toStackName(projectName: string, targetName: string): string {
   return `AgentCore-${sanitize(projectName)}-${sanitize(targetName)}`;
 }
 
+type GatewayArns = Record<string, { gatewayArn?: string }> | undefined;
+
+/**
+ * Adapt Cedar policy statements to the target's account.
+ *
+ * The policies in agentcore.json name the original deployment's Gateway by ARN
+ * (`resource == AgentCore::Gateway::"arn:…:<account>:gateway/…"`). AgentCore
+ * Policy requires a tool-scoped policy to name one specific Gateway, and a
+ * Gateway in another account gets a different, generated ARN. So for a target
+ * in another account, the ARN is swapped for the ARN of the same-named Gateway
+ * in that target's deployed state. On the target's first deploy that Gateway
+ * doesn't exist yet, so the policy is left out. The policy engine also rejects
+ * actions for tools the Gateway doesn't have, so a new account goes:
+ * deploy, then gateway-targets/create-targets.sh, then deploy again to add the
+ * policies. Until then the engine (ENFORCE, no policies) denies every call.
+ * Targets in the ARN's own account get the statements unchanged.
+ */
+function policiesForTarget<T>(projectSpec: T, targetAccount: string, sourceGateways: GatewayArns, targetGateways: GatewayArns): T {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const copy = JSON.parse(JSON.stringify(projectSpec)) as any;
+  const gatewayArn = /(resource\s*==\s*AgentCore::Gateway::")(arn:aws:bedrock-agentcore:[a-z0-9-]+:(\d{12}):gateway\/[^"]+)"/g;
+  const nameForArn = (arn: string) => Object.entries(sourceGateways ?? {}).find(([, g]) => g.gatewayArn === arn)?.[0];
+  for (const engine of copy.policyEngines ?? []) {
+    engine.policies = (engine.policies ?? []).filter((policy: { name: string; statement?: unknown }) => {
+      if (typeof policy.statement !== 'string') return true;
+      let resolved = true;
+      policy.statement = policy.statement.replace(gatewayArn, (match: string, prefix: string, arn: string, account: string) => {
+        if (account === targetAccount) return match;
+        const name = nameForArn(arn);
+        const newArn = name ? targetGateways?.[name]?.gatewayArn : undefined;
+        if (!newArn) {
+          resolved = false;
+          return match;
+        }
+        return `${prefix}${newArn}"`;
+      });
+      if (!resolved) console.warn(`Policy "${policy.name}" skipped: its Gateway isn't deployed in account ${targetAccount} yet. Deploy again to add it.`);
+      return resolved;
+    });
+  }
+  return copy as T;
+}
+
 async function main() {
   // Config root is parent of cdk/ directory. The CLI sets process.cwd() to agentcore/cdk/.
   const configRoot = path.resolve(process.cwd(), '..');
@@ -166,7 +209,12 @@ async function main() {
       : undefined;
 
     new AgentCoreStack(app, stackName, {
-      spec,
+      spec: policiesForTarget(
+        spec,
+        target.account,
+        (targetState?.default?.resources as Record<string, unknown> | undefined)?.gateways as GatewayArns,
+        targetResources?.gateways as GatewayArns
+      ),
       mcpSpec,
       credentials,
       connectorParametersByFile,

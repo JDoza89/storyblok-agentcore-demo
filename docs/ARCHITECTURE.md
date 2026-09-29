@@ -38,9 +38,9 @@ The pieces:
 
 ## What "harness" means here
 
-The model decides what to do next. The harness is everything around that decision: the instructions it reads, the tools it can call, the guardrails that stop a bad call, how context is built and kept, what shape the output has to take, and what checks the result afterward.
+The Strands docs define an agent harness as "the software around a model that turns it into an agent", and the Strands SDK as the toolkit for building one: the loop plus tools, plugins, hooks, interventions, sessions, and memory. This project composes its harness from those building blocks and adds the Storyblok-specific pieces on top: `Agent` runs the loop, `tool()` defines the local tools, `McpClient` with `toolFilters` brings in the Gateway's tools with SBMAPI hidden, intervention handlers are the guards, the vended `GoalLoop` plugin runs verify and repair, and the vended `AgentSkills` plugin loads the skills. The harness covers the instructions the model reads, the tools it can call, the guardrails that stop a bad call, how context is built and kept, what shape the output has to take, and what checks the result afterward.
 
-A useful way to read any harness is to ask, for each rule the agent must follow, where the rule is enforced. A rule can live in prose (the model has to remember it), in a tool (the model can't get it wrong because the tool does it), in a hook (the call is blocked before it happens), in policy (the Gateway denies it), or in a verifier (the result is checked after the fact). The further a rule sits from prose, the less it depends on the model's attention at step 40 of a long run.
+A useful way to read any harness is to ask, for each rule the agent must follow, where the rule is enforced. A rule can live in prose (the model has to remember it), in a tool (the model can't get it wrong because the tool does it), in an intervention (the call is denied or rewritten before it happens), in policy (the Gateway denies it), or in a verifier (the result is checked after the fact). The further a rule sits from prose, the less it depends on the model's attention at step 40 of a long run.
 
 ## The v1 harness, layer by layer
 
@@ -136,40 +136,46 @@ The v1 skill's "no snapshot" principle holds, because nothing here is checked in
 
 The review stage is resolved by exact name, `Reviewing`, and rejected if either `allow_publish` or `allow_admin_publish` is true. This space's "Ready to Publish" stage has `allow_admin_publish: true`, which is how the v1 incident happened. If no usable `Reviewing` stage exists, the harness picks the closest non-publishing stage and adds a warning the model has to repeat in its summary.
 
-Schema and stages are required. If either read fails, the session fails, because the hooks can't guard writes without them. Branding, folders, and languages are best-effort and surface as warnings.
+Schema and stages are required. If either read fails, the session fails, because the interventions can't guard writes without them. Branding, folders, and languages are best-effort and surface as warnings.
 
-The same `SpaceContext` object feeds the hooks and the verifier, so the model and the guards work from one reading of the schema. Because branding is already in the prompt, v2 no longer registers `fetch_ai_branding_guidelines` as a tool.
+The same `SpaceContext` object feeds the interventions and the verifier, so the model and the guards work from one reading of the schema. Because branding is already in the prompt, v2 no longer registers `fetch_ai_branding_guidelines` as a tool.
 
-### Launch invariants, enforced in hooks
+### Launch invariants, enforced as interventions
 
-`storyblok_kit/hooks/launch-invariants.ts` is a Strands plugin that runs on every Storyblok `execute_*` call. Before the call, it:
+The guards are Strands intervention handlers (`InterventionHandler` subclasses), registered with `new Agent({ interventions: [...] })`. Handlers run in order on each tool call. A `transform` edits the call and later handlers see the edit; a `deny` cancels the call, skips the rest, and shows the model the reason. A handler returns one action per call, so the launch rules are an ordered pipeline (`storyblok_kit/hooks/space-guard.ts` and `storyblok_kit/hooks/launch-invariants.ts`):
 
-- fills in `space_id` when the model leaves it out (`SpaceIdGuard` still rejects a different one)
-- blocks any call with a truthy `publish` flag anywhere in its parameters (publish *operations* never get this far: none is on Cedar's allowlist)
-- allows `createWorkflowStageChange` only when `workflow_stage_id` is the review stage's ID
-- leaves out any block that isn't on its field's `component_whitelist`, read from the live schema: the page body, nested `bloks` fields (a `cards` block only takes `card`), and blocks embedded in richtext fields, each against its own field's list. The write still goes ahead without them. Once it succeeds, the readback tells the model what was left out, and each removed block becomes a gap comment pinned to the field it would have gone in. On an update, blocks already on the story are never removed, so a block someone added by hand stays. A field with no whitelist stays unrestricted, as it is in Storyblok
-- rejects any story-reference value that isn't a UUID, walking the whole content tree so nested references (`productVariant.colorway`, `testimonial.customer`) are checked too
-- requires `content.component` to be `productPage` on `createStory`
-- on `updateStory`, reads the story fresh and blocks the write if `content.component` changes, `body` shrinks, or a top-level field that held a value would disappear
-- blocks `createDiscussion*` and `createComment*`, pointing the model at `flag_gap` (see below)
+1. **`SpaceIdGuard`** (deny): any call whose input names a `space_id` other than the configured one. If the configured space can't be resolved, every space-scoped call is denied.
+2. **`FillSpaceId`** (transform): adds `space_id` to an SBMCP `execute_*` call that leaves it out.
+3. **`StripUnapprovedBlocks`** (transform): leaves out any block that isn't on its field's `component_whitelist`, read from the live schema: the page body, nested `bloks` fields (a `cards` block only takes `card`), and blocks embedded in richtext fields, each against its own field's list. The write still goes ahead without them. On an update, blocks already on the story are never removed, so a block someone added by hand stays. A field with no whitelist stays unrestricted, as it is in Storyblok.
+4. **`LaunchRules`** (deny):
+   - raw SBMAPI calls (the model translates through `ai_translate_story`)
+   - any call with a truthy `publish` flag anywhere in its parameters (publish *operations* never get this far: none is on Cedar's allowlist)
+   - `createDiscussion*` and `createComment*`, pointing the model at `flag_gap` (see below)
+   - `createWorkflowStageChange` to any stage but the review stage's ID
+   - `createStory` whose `content.component` isn't `productPage`
+   - any story-reference value that isn't a UUID, walking the whole content tree so nested references (`productVariant.colorway`, `testimonial.customer`) are checked too
+   - `updateStory` that would change `content.component`, shrink `body`, or drop a top-level field that held a value, checked against a fresh read of the story
+5. **`WriteReadback`** (after-call transform): records the write, reports stripped blocks, and appends the readback (below).
+
+Every handler before the call uses `onError: 'deny'`, so a check that throws blocks the call: a deliberately broken check produced "DENIED: Handler threw…" and the tool never ran. `WriteReadback` uses `onError: 'proceed'`, because the write already happened.
 
 A blocked call comes back to the model as `Blocked by the harness:` plus the reason and what to change, so the model fixes and retries instead of stalling.
 
 v2 guards the existing `updateStory` instead of adding a patch tool. The skills and the MCP references already describe `updateStory`, and a guard keeps that tool surface the same while closing the lost-body failure. It does mean an update can't remove blocks. If the brief asks for that, the model leaves them and says so, and a human removes them in the Visual Editor.
 
-After a successful `createStory`, `updateStory`, or `createWorkflowStageChange`, the hook reads the story back and appends one line to the tool result:
+After a successful `createStory`, `updateStory`, or `createWorkflowStageChange`, `WriteReadback` reads the story back and appends one line to the tool result:
 
 ```text
 [harness readback of story 123, uuid …] body: 7 block(s) | stage: Reviewing ✓ | published: no | SEO missing: meta_title[de] | de: 29 translated field(s) | references: all uuids.
 ```
 
-The model learns what actually landed without pulling the whole story back into context. The hook also records the write in a `RunTracker` (story ID, create or update, staged stories, and the locales passed to `ai_translate_story`).
+The model learns what actually landed without pulling the whole story back into context. `WriteReadback` also records the write in a `RunTracker` (story ID, create or update, staged stories, and the locales passed to `ai_translate_story`).
 
-`storyblok_kit/story-checks.ts` holds the checks as pure functions. The hook, the readback, and the verifier all call the same ones, so a write the hook let through and a story the verifier passes are judged by the same rules.
+`storyblok_kit/story-checks.ts` holds the checks as pure functions. The interventions, the readback, and the verifier all call the same ones, so a write the pipeline let through and a story the verifier passes are judged by the same rules.
 
-### Verification after the loop
+### Verification, as a GoalLoop
 
-When the agent's turn ends, `storyblok_kit/verifier.ts` reads the story back and checks it:
+Verify and repair is Strands' vended `GoalLoop` plugin with a programmatic validator (`storyblok_kit/verify-loop.ts`). After each attempt, the validator runs `storyblok_kit/verifier.ts`, which reads the story back and checks it:
 
 | Check | Critical |
 | --- | --- |
@@ -182,7 +188,7 @@ When the agent's turn ends, `storyblok_kit/verifier.ts` reads the story back and
 | SEO fields set, default language and each translated locale | ❌ |
 | Each translated locale has `__i18n__` fields and complete SEO | ❌ |
 
-If anything fails, the harness sends the agent one follow-up turn listing exactly what failed and streams that turn to the caller too. It caps at one repair turn: that's enough for a missed SEO field or a forgotten stage change, and a run still failing after a targeted repair needs a human, not a third attempt.
+On failure, the validator returns `{ passed: false, feedback: <repair prompt> }`, and `GoalLoop` feeds that feedback back into the same agent loop as a user message. `maxAttempts: 2` gives one repair turn: enough for a missed SEO field or a forgotten stage change, and a run still failing after a targeted repair needs a human, not a third attempt. `resumePromptTemplate` passes the repair prompt through verbatim. A run that built nothing (input that names no product) passes, since there's nothing to verify. Everything streams as one response, and `storyblok_kit/stream.ts` starts the repair attempt on a new paragraph so the final `NOTES:` line still parses.
 
 ### The output contract, written by the harness
 
@@ -198,7 +204,7 @@ Every gap the run flags (a brief that left something out, an unresolved related 
 
 The model records gaps with a local `flag_gap` tool as it finds them, optionally passing the block's `_uid`, component, and field so the comment is pinned there. Nothing is posted during the run. After verification and any repair turn, `storyblok_kit/story-comments.ts` posts each recorded gap once through the Gateway (`createDiscussionForStory`, on Cedar's allowlist), followed by any verification check still failing and the session's space warnings. Posting at the end means a gap the agent resolved later in the run never becomes a stale comment. Storyblok requires a `block_uid` on every discussion, so a story-level gap, or one naming a block the story doesn't have, attaches to the story's root block (`content._uid`) with the block and field it was about kept in the message. A posting failure never fails the run, and each failure is logged with its gap's message; `notes` in `AGENT_RESULT` says how many gaps were posted.
 
-The model can't post discussions itself: the launch-invariant hook blocks `createDiscussion*` and `createComment*` and points it at `flag_gap`, so each gap is posted exactly once.
+The model can't post discussions itself: `LaunchRules` denies `createDiscussion*` and `createComment*` and points it at `flag_gap`, so each gap is posted exactly once.
 
 ### Skills, trimmed to judgment
 
@@ -222,10 +228,10 @@ Run the agent on a brief, then point the script at the story it built. It prints
 | Rule or job | v1 | v2 |
 | --- | --- | --- |
 | Discover schema, stages, folders, branding | Model, through MCP, every run | Code, at session start |
-| Never publish | Skill prose, Cedar operation allowlist | Hook blocks publish operations and flags, Cedar still behind it |
-| End in `Reviewing` | Skill prose | Hook allows only the review stage ID, verifier checks it |
-| Full-content `updateStory` | Skill prose, re-fetch ritual | Hook compares against a fresh read and blocks shrinking updates |
-| UUIDs in reference fields | Skill prose, shape check before writes | Hook rejects non-UUIDs from the live schema, verifier re-checks |
+| Never publish | Skill prose, Cedar operation allowlist | `LaunchRules` denies the publish flag, Cedar denies publish operations |
+| End in `Reviewing` | Skill prose | `LaunchRules` allows only the review stage ID, verifier checks it |
+| Full-content `updateStory` | Skill prose, re-fetch ritual | `LaunchRules` compares against a fresh read and denies shrinking updates |
+| UUIDs in reference fields | Skill prose, shape check before writes | `LaunchRules` rejects non-UUIDs from the live schema, verifier re-checks |
 | SEO in every locale | Skill prose, re-fetch | Readback after writes, verifier, one repair turn |
 | Confirm a write landed | Model re-fetches the story | Harness appends a readback |
 | `AGENT_RESULT` line | Written by the model | Built by the harness from verified state |
@@ -233,8 +239,10 @@ Run the agent on a brief, then point the script at the story it built. It prints
 
 ## Tradeoffs and limitations
 
-- **Cedar can't check parameters, so the hooks stay.** Moving the space-ID, publish-flag, and review-stage rules into Cedar `forbid` policies was tested against the live Gateway. The Gateway exposes top-level tool arguments like `operation` to Cedar, but not the nested `parameters` object: the space and publish rules never fired (a wrong space ID and `publish: true` both reached Storyblok), and the stage rule denied every stage change, including the one to `Reviewing`. The policies were rolled back within minutes. `SpaceIdGuard` and the `LaunchInvariants` parameter checks are the only enforcement for these rules, and Cedar stays the operation allowlist.
-- **Every Storyblok call goes through the Gateway.** AI branding and AI translate aren't exposed by the Storyblok MCP server, so their Management API endpoints are published as a second, OpenAPI target, `SBMAPI` (`agentcore/gateway-targets/`). Its tools take `space_id` as a top-level argument, so, unlike SBMCP's nested parameters, Cedar can check it: `allowStoryblokAiTools` permits them only for this space, and a wrong, missing, or string-typed `space_id` is denied (tested). SBMAPI is managed outside the CDK stack, like SBMCP, so spec changes are pushed with `update-sbmapi.sh`. Its tools are filtered out of the model's tool list, with a hook as a backstop, because the raw translate trigger would skip `ai_translate_story`'s per-story queue and wait. The Gateway reports a deleted background task as a generic tool error, so the poll treats an error as ambiguous and asks the story, giving up only after three in a row with no new translated fields.
+- **The Gateway's Cedar can't check SBMCP's parameters, so the interventions stay.** The Gateway generates its Cedar schema from each tool's input schema and maps nested objects recursively, but only declared properties ([Schema constraints](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/policy-schema-constraints.html)). The Storyblok MCP server declares `parameters` as a free-form object (`additionalProperties: {}`, no named properties), so its contents aren't visible to Cedar. This follows from the MCP server's progressive discovery: a few generic tools whose per-operation arguments are learned through `describe` at runtime, so they can't appear in the static manifest the Cedar schema is built from. The Gateway-side alternative for these rules is a request interceptor: a Lambda function the Gateway calls before forwarding to the target, which receives the full MCP request and can rewrite it or answer it directly ([Using interceptors with Gateway](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/gateway-interceptors.html)). A Gateway gets at most one, and the Gateway may retry it, so it must be idempotent; this project keeps them as interventions instead, next to the Space context and run tracker they depend on. Moving the space-ID, publish-flag, and review-stage rules into Cedar `forbid` policies was tested against the live Gateway and confirmed the limit: the space and publish rules never fired (a wrong space ID and `publish: true` both reached Storyblok), and the stage rule denied every stage change, including the one to `Reviewing`. The policies were rolled back within minutes. `SpaceIdGuard` and the launch-rule interventions are the only enforcement for these rules, and Cedar stays the operation allowlist.
+- **In-process Cedar works, but not under CodeZip.** Strands ships a `CedarAuthorization` intervention that evaluates Cedar inside the agent against the full tool input, and it does see nested `parameters`: the space-ID, publish-flag, and review-stage rules all evaluated correctly as Cedar policies in a local test. Under AgentCore's CodeZip packaging, though, the runtime fails to start, because the bundler inlines `@cedar-policy/cedar-wasm`'s JavaScript without copying its `.wasm` file (`ENOENT … cedar_wasm_bg.wasm`). A Container build would avoid that. With CodeZip, the parameter rules stay in the intervention pipeline.
+- **`ContextInjector` was considered and not used.** It injects ephemeral context on each model call, but it fails open, and the interventions and verifier need the same space context the model sees, so the space context stays in the system prompt, read once per session.
+- **Every Storyblok call goes through the Gateway.** AI branding and AI translate aren't exposed by the Storyblok MCP server, so their Management API endpoints are published as a second, OpenAPI target, `SBMAPI` (`agentcore/gateway-targets/`). Its tools take `space_id` as a top-level argument, so, unlike SBMCP's nested parameters, Cedar can check it: `allowStoryblokAiTools` permits them only for this space, and a wrong, missing, or string-typed `space_id` is denied (tested). SBMAPI is managed outside the CDK stack, like SBMCP, so spec changes are pushed with `update-sbmapi.sh`. Its tools are filtered out of the model's tool list, with `LaunchRules` as a backstop, because the raw translate trigger would skip `ai_translate_story`'s per-story queue and wait. Storyblok deletes a translation task when the job ends, and through the Gateway a missing task looks like any other tool error, so the poll treats a failed poll as "check the story" and reports the locale as not translated only after three failed polls in a row with no new translated fields.
 - **The prompt is bigger.** The field map and the branding JSON add tokens to every turn in exchange for fewer tool calls. The net effect on tokens and latency hasn't been measured yet.
 - **One repair turn.** A run that fails verification twice ends with the failures in `notes` instead of retrying.
 - **Locales are inferred.** The verifier checks the locales the agent passed to `ai_translate_story`. If the agent never translates a locale the brief asked for, the verifier doesn't know it was asked for. The model's summary is still where that gap shows up.
@@ -284,8 +292,8 @@ Local checks against the live space:
 
 - The Space context renders from the real schema, stages, folders, and branding.
 - The verifier passes on an existing story, Aurora Summit 1: 7 blocks, in `Reviewing`, SEO set, and 30 translated fields each for `de` and `ja`.
-- The hook blocks a `publish` flag, a `publishStory` operation, the "Ready to Publish" stage ID, an update that drops `body`, an update that shrinks `body`, and a numeric ID in `relatedProducts.products`.
-- The hook allows a stage change to `Reviewing` and a full-content update, and fills in `space_id`.
+- The intervention pipeline denies a `publish` flag, the "Ready to Publish" stage ID, an update that drops `body`, an update that shrinks `body`, and a numeric ID in `relatedProducts.products`; Cedar denies a `publishStory` operation. A check that throws denies the call (`onError: 'deny'`).
+- The pipeline allows a stage change to `Reviewing` and a full-content update, and fills in `space_id`.
 
 On the deployed runtime, a connectivity prompt (not a brief) starts a session end to end with no Storyblok token in the runtime: the Space context loads through the Gateway (including AI branding via SBMAPI), the skills sync from S3, and the harness writes `AGENT_RESULT` with `status: "unchanged"`. A full brief hasn't run through the deployed v2 yet, so there are no end-to-end numbers.
 
