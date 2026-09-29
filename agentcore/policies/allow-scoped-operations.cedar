@@ -24,10 +24,15 @@ when {
         "listAssetFolders",
         "getComponent",
         "listAssets",
+        "listWorkflowStages",
+        "listManagementComponents",
+        "getSpace",
 
         // -- mutating, via SBMCP___execute_mutating --
         "createStory",
+        "updateStory",
         "updateAsset",
-        "createWorkflowStageChange"
+        "createWorkflowStageChange",
+        "createDiscussionForStory"
     ].contains(context.input.operation)
 };

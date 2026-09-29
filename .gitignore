@@ -10,3 +10,6 @@ backups/
 
 
 ignore
+
+# AgentCore CLI build/packaging cache (regenerated on deploy)
+agentcore/.cache/
