@@ -22,8 +22,10 @@ import { makeVerifyLoop, type RunState } from './storyblok_kit/verify-loop.js';
 // The whole bucket, not a list of skills. Every skill directory at the root is
 // discovered at runtime and the local cache is keyed on the bucket's current
 // contents, so installing or editing a skill is an S3 upload and nothing else
-// -- no code change, no redeploy, no restart.
-const SKILLS_S3_ROOT = 's3://storyblok-agentcore-skills-485530831632';
+// -- no code change, no redeploy, no restart. The bucket is per account: CDK
+// sets SKILLS_S3_URI on the runtime. The fallback is the original account's
+// bucket, for local runs without the env var.
+const SKILLS_S3_ROOT = process.env.SKILLS_S3_URI ?? 's3://storyblok-agentcore-skills-485530831632';
 
 
 

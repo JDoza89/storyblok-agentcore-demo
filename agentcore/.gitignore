@@ -13,3 +13,4 @@ cdk/node_modules/
 
 # Exception: Commit the State
 !.cli/deployed-state.json
+.env.local.*.bak

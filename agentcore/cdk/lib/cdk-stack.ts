@@ -113,13 +113,22 @@ export class AgentCoreStack extends Stack {
     }
     this.application = new AgentCoreApplication(this, 'Application', appProps as any);
 
+    // The original deployment's account. Its stack is kept exactly as it was:
+    // grants it received by hand (see below) aren't duplicated there, and its
+    // runtime keeps using the bucket main.ts falls back to.
+    const ORIGINAL_ACCOUNT = '485530831632';
+    const isOriginalAccount = this.account === ORIGINAL_ACCOUNT;
+
     // The storyblokAgentGatewayTS runtime syncs its skills from the whole skills
-    // bucket at session start. That access used to live only in an inline
-    // policy attached out-of-band; granting it here keeps it in the stack, so a
-    // recreated role still works with no manual step.
-    const SKILLS_BUCKET_ARN = 'arn:aws:s3:::storyblok-agentcore-skills-485530831632';
+    // bucket at session start. The bucket is per account (bucket names are
+    // global), named storyblok-agentcore-skills-<account>; the runtime gets its
+    // URI as SKILLS_S3_URI, and read access is granted here so a fresh account
+    // needs no manual IAM step.
+    const SKILLS_BUCKET = `storyblok-agentcore-skills-${this.account}`;
+    const SKILLS_BUCKET_ARN = `arn:aws:s3:::${SKILLS_BUCKET}`;
     for (const env of this.application.environments.values()) {
       if (env.agent.name !== 'storyblokAgentGatewayTS') continue;
+      if (!isOriginalAccount) env.runtime.addEnvironmentVariable('SKILLS_S3_URI', `s3://${SKILLS_BUCKET}`);
       env.runtime.role.addToPrincipalPolicy(
         new iam.PolicyStatement({ actions: ['s3:ListBucket'], resources: [SKILLS_BUCKET_ARN] }),
       );
@@ -130,13 +139,57 @@ export class AgentCoreStack extends Stack {
 
     // Create AgentCoreMcp if there are gateways configured
     if (mcpSpec?.agentCoreGateways && mcpSpec.agentCoreGateways.length > 0) {
-      new AgentCoreMcp(this, 'Mcp', {
+      const mcp = new AgentCoreMcp(this, 'Mcp', {
         projectName: spec.name,
         mcpSpec,
         agentCoreApplication: this.application,
         credentials,
         projectTags: spec.tags,
       });
+
+      // The Gateway targets (SBMCP, SBMAPI) are created with the AWS CLI, outside
+      // this stack, so the construct doesn't grant the Gateway role the Storyblok
+      // credential they use. This grants it: read the PAT from AgentCore Identity
+      // (token vault, workload identity, and the Secrets Manager secret behind
+      // the storyblok-mcp-pat provider). The original account has this as a
+      // hand-attached inline policy, so it's skipped there.
+      if (!isOriginalAccount) {
+        const reInventGateway = mcp.gateways.get('reInventDemoGateway');
+        if (reInventGateway?.roleArn) {
+          const gatewayRole = iam.Role.fromRoleArn(this, 'ReInventDemoGatewayRoleRef', reInventGateway.roleArn, {
+            mutable: true,
+          });
+          const identity = `arn:aws:bedrock-agentcore:${this.region}:${this.account}`;
+          new iam.Policy(this, 'StoryblokGatewayCredentialAccess', {
+            roles: [gatewayRole],
+            statements: [
+              new iam.PolicyStatement({
+                actions: ['bedrock-agentcore:GetResourceApiKey'],
+                resources: [
+                  `${identity}:token-vault/default`,
+                  `${identity}:token-vault/default/apikeycredentialprovider/storyblok-mcp-pat`,
+                  `${identity}:workload-identity-directory/default`,
+                  `${identity}:workload-identity-directory/default/workload-identity/*`,
+                ],
+              }),
+              new iam.PolicyStatement({
+                actions: ['secretsmanager:GetSecretValue'],
+                resources: [
+                  `arn:aws:secretsmanager:${this.region}:${this.account}:secret:bedrock-agentcore-identity!default/apikey/storyblok-mcp-pat-*`,
+                ],
+              }),
+              new iam.PolicyStatement({
+                actions: [
+                  'bedrock-agentcore:GetWorkloadAccessToken',
+                  'bedrock-agentcore:GetWorkloadAccessTokenForUserId',
+                  'bedrock-agentcore:CompleteResourceTokenAuth',
+                ],
+                resources: ['*'],
+              }),
+            ],
+          });
+        }
+      }
     }
 
     // Create payment infrastructure via CFN constructs

@@ -3,5 +3,10 @@
     "name": "default",
     "account": "485530831632",
     "region": "us-east-1"
+  },
+  {
+    "name": "neworg",
+    "account": "484941465042",
+    "region": "us-east-1"
   }
 ]

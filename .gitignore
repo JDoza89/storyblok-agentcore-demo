@@ -13,3 +13,6 @@ ignore
 
 # AgentCore CLI build/packaging cache (regenerated on deploy)
 agentcore/.cache/
+
+# AWS credentials for the new account -- local only, never commit
+.aws/
