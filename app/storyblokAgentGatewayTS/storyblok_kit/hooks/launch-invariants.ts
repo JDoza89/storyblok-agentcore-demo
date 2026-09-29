@@ -1,13 +1,13 @@
 import {
-  AfterToolCallEvent,
-  BeforeToolCallEvent,
+  InterventionActions,
+  InterventionHandler,
   TextBlock,
   ToolResultBlock,
-  type LocalAgent,
-  type Plugin,
+  type AfterToolCallEvent,
+  type BeforeToolCallEvent,
+  type OnError,
 } from '@strands-agents/sdk';
 
-import { getStory } from '../storyblok-reads.js';
 import type { RunTracker } from '../run-tracker.js';
 import { CONTENT_TYPE, type SpaceContext } from '../space-context.js';
 import {
@@ -19,26 +19,38 @@ import {
   stripDisallowedComponents,
   type RemovedBlock,
 } from '../story-checks.js';
+import { getStory, type StoryblokStory } from '../storyblok-reads.js';
+
+const { deny, proceed, transform } = InterventionActions;
 
 /**
- * The launch rules that v1 kept as prose in productBrief-to-storyblokPage,
- * enforced in code on every Storyblok tool call instead.
+ * The launch rules, enforced on every Storyblok tool call as Strands
+ * intervention handlers.
  *
- * v1 already proved the pattern twice: SpaceIdGuard and the per-story translate
- * queue are the two rules that moved out of the skill into code, and neither
- * failed again afterwards. Everything below is a rule that did fail while it
- * lived in prose: a story moved to a publishing stage, an update that wiped a
- * page's body, numeric ids written into reference fields.
+ * Cedar on the Gateway decides which SBMCP operations may run, but it can't see
+ * their nested `parameters`, which is where most launch mistakes live:
+ * `publish: true` on an allowed `updateStory`, a stage change to a publishing
+ * stage, a numeric id in a reference field, an update that wipes a page's body.
+ * These handlers see the full call.
  *
- * Cedar on the Gateway is still the outer boundary, and it only sees the
- * operation name. These hooks see the parameters, which is where most of these
- * mistakes actually live -- `publish: true` on an otherwise-permitted
- * `updateStory` passes policy.
+ * Interventions run in registration order on each tool call. A `transform`
+ * edits the call and later handlers see the edit; a `deny` cancels it, shows
+ * the model the reason, and skips the rest. Every before-call handler here is
+ * `onError: 'deny'`, so a check that throws blocks the call instead of letting
+ * it through. The pipeline, in order:
+ *
+ *   1. FillSpaceId            transform  add this space's id where the call omits it
+ *   2. StripUnapprovedBlocks  transform  drop blocks their field's whitelist doesn't allow
+ *   3. LaunchRules            deny       every rule that refuses a call outright
+ *   4. WriteReadback          after      record the write, report stripped blocks, append a readback
+ *
+ * (SpaceIdGuard, registered before these, denies a call aimed at another space.)
  */
 
 type Params = Record<string, unknown>;
 
 const STORYBLOK_EXECUTE = /(?:^|_)execute_(mutating|readonly|destructive)$/;
+const BLOCKED_PREFIX = 'Blocked by the harness: ';
 
 function isObject(value: unknown): value is Params {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -108,64 +120,148 @@ function looksLikeFailure(result: ToolResultBlock): boolean {
   return /"(error|errors)"\s*:|HTTP [45]\d\d|status(Code)?"?\s*:\s*[45]\d\d/i.test(resultText(result));
 }
 
-export class LaunchInvariants implements Plugin {
-  readonly name = 'storyblok-launch-invariants';
+/** A Storyblok execute call's operation and parameters, or null for any other tool. */
+function storyblokCall(event: BeforeToolCallEvent | AfterToolCallEvent): { operation: string; params: Params } | null {
+  const input = event.toolUse.input;
+  if (!STORYBLOK_EXECUTE.test(event.toolUse.name ?? '') || !isObject(input)) return null;
+  const operation = typeof input.operation === 'string' ? input.operation : '';
+  return { operation, params: isObject(input.parameters) ? input.parameters : {} };
+}
+
+/** A createStory/updateStory call's story and content, or null for folders and content-less writes. */
+function storyWrite(params: Params): { story: Params; content: Params } | null {
+  const story = findKey(params, 'story');
+  if (!isObject(story) || isTruthyFlag(story.is_folder) || !isObject(story.content)) return null;
+  return { story, content: story.content };
+}
+
+/**
+ * State the pipeline shares across one tool call: the story an update targets,
+ * read once for both the strip and the destructive-update check, and the blocks
+ * stripped from a write, held until its result arrives.
+ */
+class WriteState {
+  private readonly current = new Map<string, Promise<StoryblokStory>>();
+  readonly removed = new Map<string, RemovedBlock[]>();
+
+  currentStory(toolUseId: string, storyId: number): Promise<StoryblokStory> {
+    let story = this.current.get(toolUseId);
+    if (!story) {
+      story = getStory(storyId);
+      this.current.set(toolUseId, story);
+    }
+    return story;
+  }
+
+  forget(toolUseId: string): void {
+    this.current.delete(toolUseId);
+    this.removed.delete(toolUseId);
+  }
+}
+
+/** Every call gets this deployment's space id; SpaceIdGuard already denied a different one. */
+class FillSpaceId extends InterventionHandler {
+  readonly name = 'storyblok-fill-space-id';
+  override readonly onError: OnError = 'deny';
+
+  constructor(private readonly ctx: SpaceContext) {
+    super();
+  }
+
+  override beforeToolCall(event: BeforeToolCallEvent) {
+    const call = storyblokCall(event);
+    if (!call || call.params.space_id !== undefined) return proceed();
+    const input = event.toolUse.input as Params;
+    return transform(() => {
+      input.parameters = { ...call.params, space_id: this.ctx.spaceId };
+    }, { reason: 'space_id filled in' });
+  }
+}
+
+/**
+ * Unapproved blocks are dropped, not refused: the write goes ahead without
+ * them, and WriteReadback tells the model and flags each one for the reviewer.
+ * On an update, blocks already on the story are never removed.
+ */
+class StripUnapprovedBlocks extends InterventionHandler {
+  readonly name = 'storyblok-strip-unapproved-blocks';
+  override readonly onError: OnError = 'deny';
+
+  constructor(
+    private readonly ctx: SpaceContext,
+    private readonly state: WriteState,
+  ) {
+    super();
+  }
+
+  override async beforeToolCall(event: BeforeToolCallEvent) {
+    const call = storyblokCall(event);
+    if (!call || (call.operation !== 'createStory' && call.operation !== 'updateStory')) return proceed();
+    const write = storyWrite(call.params);
+    if (!write) return proceed();
+
+    let keep = new Set<string>();
+    if (call.operation === 'updateStory') {
+      const storyId = updateTargetId(call.params);
+      // LaunchRules denies an update it can't check; nothing to strip against.
+      if (storyId === null) return proceed();
+      try {
+        keep = blockUids((await this.state.currentStory(event.toolUse.toolUseId, storyId)).content);
+      } catch {
+        return proceed();
+      }
+    }
+
+    // Strip a copy first, so a call with nothing to strip goes through untouched.
+    const cleaned = structuredClone(write.content);
+    const removed = stripDisallowedComponents(cleaned, this.ctx, keep);
+    if (removed.length === 0) return proceed();
+    this.state.removed.set(event.toolUse.toolUseId, removed);
+    return transform(() => {
+      write.story.content = cleaned;
+    }, { reason: `stripped ${removed.length} unapproved block(s)` });
+  }
+}
+
+/** Every rule that refuses a call outright, with a reason the model can act on. */
+class LaunchRules extends InterventionHandler {
+  readonly name = 'storyblok-launch-rules';
+  override readonly onError: OnError = 'deny';
 
   constructor(
     private readonly ctx: SpaceContext,
     private readonly tracker: RunTracker,
-  ) {}
-
-  /** Blocks stripped from a write, keyed by tool-use id until the write's result arrives. */
-  private readonly removedByToolUse = new Map<string, RemovedBlock[]>();
-
-  initAgent(agent: LocalAgent): void {
-    agent.addHook(BeforeToolCallEvent, async (event) => {
-      const cancel = await this.checkBefore(event.toolUse.name ?? '', event.toolUse.input, event.toolUse.toolUseId);
-      if (cancel) {
-        console.warn(`Blocked ${event.toolUse.name}: ${cancel}`);
-        event.cancel = `Blocked by the harness: ${cancel}`;
-      }
-    });
-
-    agent.addHook(AfterToolCallEvent, async (event) => {
-      const readback = await this.readbackAfter(
-        event.toolUse.name ?? '',
-        event.toolUse.input,
-        event.result,
-        event.toolUse.toolUseId,
-      );
-      if (readback) {
-        event.result = new ToolResultBlock({
-          toolUseId: event.result.toolUseId,
-          status: event.result.status,
-          content: [...event.result.content, new TextBlock(readback)],
-        });
-      }
-    });
+    private readonly state: WriteState,
+  ) {
+    super();
   }
 
-  /** Returns a reason to cancel the call, or null to let it through. */
-  private async checkBefore(toolName: string, input: unknown, toolUseId: string): Promise<string | null> {
+  override async beforeToolCall(event: BeforeToolCallEvent) {
+    const reason = await this.check(event);
+    if (!reason) return proceed();
+    this.state.forget(event.toolUse.toolUseId);
+    console.warn(`Blocked ${event.toolUse.name}: ${reason}`);
+    return deny(`${BLOCKED_PREFIX}${reason}`);
+  }
+
+  private async check(event: BeforeToolCallEvent): Promise<string | null> {
+    const toolName = event.toolUse.name ?? '';
+    const input = event.toolUse.input;
+
     if (toolName === 'ai_translate_story' && isObject(input) && typeof input.lang === 'string') {
       this.tracker.locales.add(input.lang);
       return null;
     }
-    // Backstop for the tool filter in mcp_client/client.ts: SBMAPI's tools are
+    // Backstop for the tool filter on the model's MCP client: SBMAPI's tools are
     // the harness's, and the raw translate trigger skips ai_translate_story's
     // per-story queue and wait.
     if (toolName.startsWith('SBMAPI___')) {
       return `'${toolName}' is called by the harness, not the agent. To translate a story, use ai_translate_story.`;
     }
-    if (!STORYBLOK_EXECUTE.test(toolName) || !isObject(input)) return null;
 
-    const operation = typeof input.operation === 'string' ? input.operation : '';
-    if (!isObject(input.parameters)) input.parameters = {};
-    const params = input.parameters as Params;
-
-    // The one fact every call needs and the model never has to supply.
-    // SpaceIdGuard still rejects a *different* space id if one is passed.
-    if (params.space_id === undefined) params.space_id = this.ctx.spaceId;
+    const call = storyblokCall(event);
+    if (!call) return null;
+    const { operation, params } = call;
 
     // Publish *operations* never get this far: none is on Cedar's allowlist. The
     // flag on an allowed operation is what needs checking here.
@@ -181,7 +277,9 @@ export class LaunchInvariants implements Plugin {
     }
 
     if (operation === 'createWorkflowStageChange') return this.checkStageChange(params);
-    if (operation === 'createStory' || operation === 'updateStory') return this.checkStoryWrite(operation, params, toolUseId);
+    if (operation === 'createStory' || operation === 'updateStory') {
+      return this.checkStoryWrite(operation, params, event.toolUse.toolUseId);
+    }
     return null;
   }
 
@@ -199,70 +297,97 @@ export class LaunchInvariants implements Plugin {
   }
 
   private async checkStoryWrite(operation: string, params: Params, toolUseId: string): Promise<string | null> {
-    const story = findKey(params, 'story');
-    if (!isObject(story) || isTruthyFlag(story.is_folder)) return null;
-    const content = story.content;
-    if (!isObject(content)) return null;
+    const write = storyWrite(params);
+    if (!write) return null;
+    const { content } = write;
 
     if (operation === 'createStory' && content.component !== CONTENT_TYPE) {
       return `new stories must have content.component '${CONTENT_TYPE}', not '${String(content.component)}'.`;
     }
 
-    // updateStory replaces story.content in full, so read what is there now:
-    // the destructive-update check compares against it, and blocks already on
-    // the story are never stripped below.
-    let current;
-    if (operation === 'updateStory') {
-      const storyId = updateTargetId(params);
-      if (storyId === null) return 'updateStory needs the numeric story id in parameters.id.';
-      try {
-        current = await getStory(storyId);
-      } catch (error) {
-        return `the harness could not read story ${storyId} to check this update (${String(error)}). Try the update again.`;
-      }
-    }
-
-    // Unapproved blocks are dropped, not refused: the write goes ahead without
-    // them, and the after-hook tells the model and flags each one for the reviewer.
-    const removed = stripDisallowedComponents(content, this.ctx, current ? blockUids(current.content) : new Set());
-    if (removed.length > 0) this.removedByToolUse.set(toolUseId, removed);
-
     const badRefs = invalidReferences(content, this.ctx);
     if (badRefs.length > 0) {
-      this.removedByToolUse.delete(toolUseId);
       return (
         `these story-reference values are not uuids: ${badRefs.join('; ')}. Reference fields take the ` +
         "story's 36-character uuid, never its numeric id. Look up each story's uuid and send the write again."
       );
     }
 
-    if (!current) return null;
+    if (operation !== 'updateStory') return null;
+
+    // updateStory replaces story.content in full, so compare against what is there now.
+    const storyId = updateTargetId(params);
+    if (storyId === null) return 'updateStory needs the numeric story id in parameters.id.';
+    let current;
+    try {
+      current = await this.state.currentStory(toolUseId, storyId);
+    } catch (error) {
+      return `the harness could not read story ${storyId} to check this update (${String(error)}). Try the update again.`;
+    }
+
     const before = bodyLength(current.content) ?? 0;
     const after = bodyLength(content);
     const dropped = droppedKeys(current.content, content);
-    let refusal: string | null = null;
     if (content.component !== current.content.component) {
-      refusal = `content.component changed from '${String(current.content.component)}' to '${String(content.component)}'.`;
-    } else if (after === null || after < before || dropped.length > 0) {
-      refusal =
+      return `content.component changed from '${String(current.content.component)}' to '${String(content.component)}'.`;
+    }
+    if (after === null || after < before || dropped.length > 0) {
+      return (
         `this update would remove existing content (body ${before} -> ${after ?? 'missing'} block(s)` +
         `${dropped.length > 0 ? `; fields dropped: ${dropped.join(', ')}` : ''}). updateStory replaces the whole ` +
         'content object: call getStoryById now, change only what you intend to on that fresh copy, and send ' +
         'the complete object. If removing blocks is genuinely what the brief asks for, leave them and say so ' +
-        'in your summary; a human removes blocks in the Visual Editor.';
+        'in your summary; a human removes blocks in the Visual Editor.'
+      );
     }
-    if (refusal) this.removedByToolUse.delete(toolUseId);
-    return refusal;
+    return null;
+  }
+}
+
+/**
+ * After a successful write: record it in the run tracker, flag any stripped
+ * blocks for the reviewer, and append a one-line readback of what landed, so
+ * the model doesn't re-fetch the story to confirm. A failed readback never
+ * blocks anything (`onError: 'proceed'`); the write already happened.
+ */
+class WriteReadback extends InterventionHandler {
+  readonly name = 'storyblok-write-readback';
+  override readonly onError: OnError = 'proceed';
+
+  constructor(
+    private readonly ctx: SpaceContext,
+    private readonly tracker: RunTracker,
+    private readonly state: WriteState,
+  ) {
+    super();
   }
 
-  /**
-   * Once a write with stripped blocks has succeeded, flag each removed block for
-   * the reviewer (pinned to the field it would have gone in) and return a line
-   * telling the model what didn't land.
-   */
+  override async afterToolCall(event: AfterToolCallEvent) {
+    const call = storyblokCall(event);
+    const toolUseId = event.toolUse.toolUseId;
+    if (!call) {
+      this.state.forget(toolUseId);
+      return proceed();
+    }
+    const failed = looksLikeFailure(event.result);
+    const removedNote = this.reportRemoved(toolUseId, !failed);
+    this.state.forget(toolUseId);
+    if (failed) return proceed();
+
+    const readback = await this.readbackFor(call.operation, call.params, event.result);
+    const note = [removedNote, readback].filter(Boolean).join('\n');
+    if (!note) return proceed();
+    return transform(() => {
+      event.result = new ToolResultBlock({
+        toolUseId: event.result.toolUseId,
+        status: event.result.status,
+        content: [...event.result.content, new TextBlock(note)],
+      });
+    }, { reason: 'readback appended' });
+  }
+
   private reportRemoved(toolUseId: string, succeeded: boolean): string | null {
-    const removed = this.removedByToolUse.get(toolUseId);
-    this.removedByToolUse.delete(toolUseId);
+    const removed = this.state.removed.get(toolUseId);
     if (!removed || !succeeded) return null;
     for (const block of removed) {
       this.tracker.gaps.push({
@@ -283,25 +408,7 @@ export class LaunchInvariants implements Plugin {
     );
   }
 
-  /** After a successful write, record it and return a compact readback to append. */
-  private async readbackAfter(
-    toolName: string,
-    input: unknown,
-    result: ToolResultBlock,
-    toolUseId: string,
-  ): Promise<string | null> {
-    if (!STORYBLOK_EXECUTE.test(toolName) || !isObject(input)) return null;
-    const failed = looksLikeFailure(result);
-    const removedNote = this.reportRemoved(toolUseId, !failed);
-    if (failed) return null;
-    const readback = await this.readbackFor(input, result);
-    return [removedNote, readback].filter(Boolean).join('\n') || null;
-  }
-
-  private async readbackFor(input: Params, result: ToolResultBlock): Promise<string | null> {
-    const operation = input.operation;
-    const params = isObject(input.parameters) ? input.parameters : {};
-
+  private async readbackFor(operation: string, params: Params, result: ToolResultBlock): Promise<string | null> {
     let storyId: number | null = null;
     if (operation === 'createStory') {
       const story = findKey(params, 'story');
@@ -326,4 +433,15 @@ export class LaunchInvariants implements Plugin {
       return `[harness readback unavailable for story ${storyId}: ${String(error)}]`;
     }
   }
+}
+
+/** The launch-rule pipeline, in the order the handlers must run. */
+export function launchInterventions(ctx: SpaceContext, tracker: RunTracker): InterventionHandler[] {
+  const state = new WriteState();
+  return [
+    new FillSpaceId(ctx),
+    new StripUnapprovedBlocks(ctx, state),
+    new LaunchRules(ctx, tracker, state),
+    new WriteReadback(ctx, tracker, state),
+  ];
 }

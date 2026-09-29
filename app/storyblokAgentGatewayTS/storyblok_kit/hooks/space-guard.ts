@@ -1,5 +1,4 @@
-import { BeforeToolCallEvent, type Plugin } from '@strands-agents/sdk';
-import type { LocalAgent } from '@strands-agents/sdk';
+import { InterventionActions, InterventionHandler, type BeforeToolCallEvent, type OnError } from '@strands-agents/sdk';
 
 import { resolveStoryblokSpaceId } from '../storyblok-config.js';
 
@@ -51,12 +50,17 @@ function findMismatchedSpaceId(value: unknown, allowed: number | null): unknown 
  * MCP setup. Instead this scans every tool call's input, regardless of tool
  * name, for a mismatched space_id -- strictly safer, and genuinely portable
  * across any agent that adds this hook.
+ *
+ * A Strands intervention handler: `deny` cancels the call and shows the model
+ * the reason, and `onError: 'deny'` blocks the call if the check itself throws.
  */
-export class SpaceIdGuard implements Plugin {
+export class SpaceIdGuard extends InterventionHandler {
   readonly name = 'storyblok-space-id-guard';
+  override readonly onError: OnError = 'deny';
   private readonly allowedSpaceId: number | null;
 
   constructor() {
+    super();
     this.allowedSpaceId = resolveStoryblokSpaceId();
     if (this.allowedSpaceId === null) {
       console.error(
@@ -66,19 +70,16 @@ export class SpaceIdGuard implements Plugin {
     }
   }
 
-  initAgent(agent: LocalAgent): void {
-    agent.addHook(BeforeToolCallEvent, (event) => {
-      const toolName = event.toolUse.name ?? '';
-      const badSpaceId = findMismatchedSpaceId(event.toolUse.input, this.allowedSpaceId);
-      if (badSpaceId !== undefined) {
-        console.warn(
-          `Blocked tool call ${toolName}: space_id ${String(badSpaceId)} does not match ` +
-            `the allowed space ${String(this.allowedSpaceId)}`,
-        );
-        event.cancel =
-          `Blocked: this agent may only operate on space_id ${String(this.allowedSpaceId)}. ` +
-          `The tool call specified space_id ${String(badSpaceId)}, which is not allowed.`;
-      }
-    });
+  override beforeToolCall(event: BeforeToolCallEvent) {
+    const badSpaceId = findMismatchedSpaceId(event.toolUse.input, this.allowedSpaceId);
+    if (badSpaceId === undefined) return InterventionActions.proceed();
+    console.warn(
+      `Blocked tool call ${event.toolUse.name ?? ''}: space_id ${String(badSpaceId)} does not match ` +
+        `the allowed space ${String(this.allowedSpaceId)}`,
+    );
+    return InterventionActions.deny(
+      `Blocked: this agent may only operate on space_id ${String(this.allowedSpaceId)}. ` +
+        `The tool call specified space_id ${String(badSpaceId)}, which is not allowed.`,
+    );
   }
 }

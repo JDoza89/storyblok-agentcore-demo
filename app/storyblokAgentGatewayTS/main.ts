@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { loadModel } from './model/load.js';
 import { getAllGatewayMcpClients } from './mcp_client/client.js';
 import { resolveStoryblokRegion, resolveStoryblokSpaceId } from './storyblok_kit/storyblok-config.js';
-import { LaunchInvariants } from './storyblok_kit/hooks/launch-invariants.js';
+import { launchInterventions } from './storyblok_kit/hooks/launch-invariants.js';
 import { SpaceIdGuard } from './storyblok_kit/hooks/space-guard.js';
 import { RunTracker, type Gap } from './storyblok_kit/run-tracker.js';
 import { syncSkillsRoot } from './storyblok_kit/skills.js';
@@ -144,12 +144,9 @@ async function getOrCreateSession(sessionId: string): Promise<Session> {
     systemPrompt: buildSystemPrompt(ctx),
     tools: buildTools(skillsRoot, tracker),
     conversationManager: new NullConversationManager(),
-    plugins: [
-      new SpaceIdGuard(),
-      new LaunchInvariants(ctx, tracker),
-      new AgentSkills({ skills: [skillsRoot] }),
-      makeVerifyLoop(ctx, tracker, run),
-    ],
+    // Interventions run in this order on every tool call; see launch-invariants.ts.
+    interventions: [new SpaceIdGuard(), ...launchInterventions(ctx, tracker)],
+    plugins: [new AgentSkills({ skills: [skillsRoot] }), makeVerifyLoop(ctx, tracker, run)],
   });
   const session = { agent, ctx, tracker, run };
   sessionCache.set(sessionId, session);
