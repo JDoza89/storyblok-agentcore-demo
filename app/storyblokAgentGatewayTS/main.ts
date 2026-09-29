@@ -1,7 +1,6 @@
 import { BedrockAgentCoreApp } from 'bedrock-agentcore/runtime';
 import { Agent, NullConversationManager, type ToolList } from '@strands-agents/sdk';
 import { AgentSkills } from '@strands-agents/sdk/vended-plugins/skills';
-import type { InvokeArgs } from '@strands-agents/sdk';
 import { z } from 'zod';
 
 import { loadModel } from './model/load.js';
@@ -16,7 +15,9 @@ import { postGapsAsComments, type PostResult } from './storyblok_kit/story-comme
 import { aiTranslateStory } from './storyblok_kit/tools/ai-translate.js';
 import { makeFlagGapTool } from './storyblok_kit/tools/flag-gap.js';
 import { makeReadSkillResourceTool } from './storyblok_kit/tools/skill-resources.js';
-import { failures, repairPrompt, verifyStory, type Verification } from './storyblok_kit/verifier.js';
+import { failures, type Verification } from './storyblok_kit/verifier.js';
+import { lastNotesLine, streamTurn } from './storyblok_kit/stream.js';
+import { makeVerifyLoop, type RunState } from './storyblok_kit/verify-loop.js';
 
 // The whole bucket, not a list of skills. Every skill directory at the root is
 // discovered at runtime and the local cache is keyed on the bucket's current
@@ -24,10 +25,7 @@ import { failures, repairPrompt, verifyStory, type Verification } from './storyb
 // -- no code change, no redeploy, no restart.
 const SKILLS_S3_ROOT = 's3://storyblok-agentcore-skills-485530831632';
 
-// One follow-up turn when verification finds a problem. Enough to fix a missed
-// SEO field or a stage the model forgot; a run that is still failing after a
-// targeted repair needs a human, not a third attempt.
-const MAX_REPAIR_TURNS = 1;
+
 
 /**
  * Build this session's system prompt.
@@ -107,6 +105,7 @@ interface Session {
   agent: Agent;
   ctx: SpaceContext;
   tracker: RunTracker;
+  run: RunState;
 }
 
 const SESSION_CACHE_LIMIT = 128;
@@ -138,15 +137,21 @@ async function getOrCreateSession(sessionId: string): Promise<Session> {
     loadSpaceContext(spaceId, region),
   ]);
   const tracker = new RunTracker();
+  const run: RunState = { verification: null, attempt: 1 };
 
   const agent = new Agent({
     model: loadModel(),
     systemPrompt: buildSystemPrompt(ctx),
     tools: buildTools(skillsRoot, tracker),
     conversationManager: new NullConversationManager(),
-    plugins: [new SpaceIdGuard(), new LaunchInvariants(ctx, tracker), new AgentSkills({ skills: [skillsRoot] })],
+    plugins: [
+      new SpaceIdGuard(),
+      new LaunchInvariants(ctx, tracker),
+      new AgentSkills({ skills: [skillsRoot] }),
+      makeVerifyLoop(ctx, tracker, run),
+    ],
   });
-  const session = { agent, ctx, tracker };
+  const session = { agent, ctx, tracker, run };
   sessionCache.set(sessionId, session);
   return session;
 }
@@ -161,25 +166,7 @@ export function extractPrompt(payload: Record<string, unknown>): string {
   return prompt;
 }
 
-/** Stream one agent turn, yielding text chunks and collecting the full text. */
-async function* streamTurn(agent: Agent, prompt: InvokeArgs, collected: { text: string }) {
-  collected.text = '';
-  for await (const event of agent.stream(prompt)) {
-    if (
-      event.type === 'modelStreamUpdateEvent' &&
-      event.event?.type === 'modelContentBlockDeltaEvent' &&
-      event.event.delta?.type === 'textDelta'
-    ) {
-      collected.text += event.event.delta.text;
-      yield { data: event.event.delta.text };
-    }
-  }
-}
 
-function lastNotesLine(text: string): string {
-  const matches = [...text.matchAll(/^NOTES:\s*(.+)$/gm)];
-  return matches.length > 0 ? matches[matches.length - 1]![1]!.trim() : '';
-}
 
 /**
  * The AGENT_RESULT line, built from the tracker and the verifier rather than
@@ -248,8 +235,10 @@ const app = new BedrockAgentCoreApp({
       context.log.info('Invoking Agent.....');
 
       const sessionId = context?.sessionId ?? 'default-session';
-      const { agent, ctx, tracker } = await getOrCreateSession(sessionId);
+      const { agent, ctx, tracker, run } = await getOrCreateSession(sessionId);
       tracker.reset();
+      run.verification = null;
+      run.attempt = 1;
 
       const prompt = extractPrompt(payload);
 
@@ -257,17 +246,10 @@ const app = new BedrockAgentCoreApp({
       // see v1 for why a lingering user turn breaks the next invocation.
       const snapshot = agent.takeSnapshot({ include: ['messages'] });
       const collected = { text: '' };
-      let verification: Verification | null = null;
       try {
-        yield* streamTurn(agent, prompt, collected);
-
-        for (let repair = 0; tracker.storyId !== null; repair++) {
-          verification = await verifyStory(tracker.storyId, ctx, tracker);
-          if (failures(verification).length === 0 || repair >= MAX_REPAIR_TURNS) break;
-          context.log.info(`Verification failed: ${failures(verification).map((c) => c.name).join(', ')}`);
-          yield { data: '\n\n' };
-          yield* streamTurn(agent, repairPrompt(verification), collected);
-        }
+        // One stream covers the first attempt and, if the verifier fails it, the
+        // repair attempt GoalLoop starts inside the same agent loop.
+        yield* streamTurn(agent, prompt, collected, run);
       } catch (error) {
         agent.loadSnapshot(snapshot);
         throw error;
@@ -275,6 +257,7 @@ const app = new BedrockAgentCoreApp({
 
       // Post gaps only once the story is final, so a gap the agent resolved
       // later in the run, or during the repair turn, never becomes a stale comment.
+      const verification = run.verification;
       let comments: PostResult | null = null;
       if (tracker.storyId !== null) {
         const gaps = collectGaps(ctx, tracker, verification);
