@@ -1,12 +1,12 @@
 [
   {
     "name": "default",
-    "account": "485530831632",
+    "account": "484941465042",
     "region": "us-east-1"
   },
   {
-    "name": "neworg",
-    "account": "484941465042",
+    "name": "original",
+    "account": "485530831632",
     "region": "us-east-1"
   }
 ]

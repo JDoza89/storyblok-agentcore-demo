@@ -30,18 +30,20 @@ type GatewayArns = Record<string, { gatewayArn?: string }> | undefined;
  * Policy requires a tool-scoped policy to name one specific Gateway, and a
  * Gateway in another account gets a different, generated ARN. So for a target
  * in another account, the ARN is swapped for the ARN of the same-named Gateway
- * in that target's deployed state. On the target's first deploy that Gateway
+ * in that target's deployed state, looking the name up across every target's
+ * deployed Gateways. On the target's first deploy that Gateway
  * doesn't exist yet, so the policy is left out. The policy engine also rejects
  * actions for tools the Gateway doesn't have, so a new account goes:
  * deploy, then gateway-targets/create-targets.sh, then deploy again to add the
  * policies. Until then the engine (ENFORCE, no policies) denies every call.
  * Targets in the ARN's own account get the statements unchanged.
  */
-function policiesForTarget<T>(projectSpec: T, targetAccount: string, sourceGateways: GatewayArns, targetGateways: GatewayArns): T {
+function policiesForTarget<T>(projectSpec: T, targetAccount: string, knownGateways: GatewayArns[], targetGateways: GatewayArns): T {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const copy = JSON.parse(JSON.stringify(projectSpec)) as any;
   const gatewayArn = /(resource\s*==\s*AgentCore::Gateway::")(arn:aws:bedrock-agentcore:[a-z0-9-]+:(\d{12}):gateway\/[^"]+)"/g;
-  const nameForArn = (arn: string) => Object.entries(sourceGateways ?? {}).find(([, g]) => g.gatewayArn === arn)?.[0];
+  const nameForArn = (arn: string) =>
+    knownGateways.flatMap(g => Object.entries(g ?? {})).find(([, g]) => g.gatewayArn === arn)?.[0];
   for (const engine of copy.policyEngines ?? []) {
     engine.policies = (engine.policies ?? []).filter((policy: { name: string; statement?: unknown }) => {
       if (typeof policy.statement !== 'string') return true;
@@ -166,6 +168,17 @@ async function main() {
     const targetState = (deployedState as Record<string, unknown>)?.targets as
       Record<string, Record<string, unknown>> | undefined;
     const targetResources = targetState?.[target.name]?.resources as Record<string, unknown> | undefined;
+
+    // A target whose deployed stack has a different name was renamed after it was
+    // deployed (the original account's target was `default`, now `original`).
+    // Synthesizing it would create a second stack beside the live one, so leave it
+    // out; the CLI then refuses to deploy it. Invoking it still works.
+    const deployedStackName = targetResources?.stackName as string | undefined;
+    if (deployedStackName && deployedStackName !== stackName) {
+      console.warn(`Target "${target.name}" skipped: its live stack is ${deployedStackName}, not ${stackName}.`);
+      continue;
+    }
+
     const credentials = targetResources?.credentials as
       Record<string, { credentialProviderArn: string; clientSecretArn?: string }> | undefined;
 
@@ -212,7 +225,7 @@ async function main() {
       spec: policiesForTarget(
         spec,
         target.account,
-        (targetState?.default?.resources as Record<string, unknown> | undefined)?.gateways as GatewayArns,
+        Object.values(targetState ?? {}).map(t => (t?.resources as Record<string, unknown> | undefined)?.gateways as GatewayArns),
         targetResources?.gateways as GatewayArns
       ),
       mcpSpec,

@@ -251,6 +251,22 @@ const app = new BedrockAgentCoreApp({
         yield* streamTurn(agent, prompt, collected, run);
       } catch (error) {
         agent.loadSnapshot(snapshot);
+        // The error only reaches the caller's stream, so log it for the runtime logs too.
+        console.error(`Run failed on attempt ${run.attempt}:`, error instanceof Error ? (error.stack ?? error.message) : error);
+        // The story may already be written; post what the run flagged so the reviewer
+        // still sees it, plus a note that the verifier never ran.
+        if (tracker.storyId !== null) {
+          const reason = error instanceof Error ? error.message : String(error);
+          const gaps: Gap[] = [
+            ...collectGaps(ctx, tracker, null),
+            { message: `The agent run failed before it verified this story (${reason}). Check the story before publishing.` },
+          ];
+          try {
+            await postGapsAsComments(tracker.storyId, gaps);
+          } catch (postError) {
+            console.error('Posting gaps after the failed run also failed:', postError);
+          }
+        }
         throw error;
       }
 

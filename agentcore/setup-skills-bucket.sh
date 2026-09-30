@@ -3,18 +3,18 @@
 # The bucket is named storyblok-agentcore-skills-<account>, which is what the
 # CDK stack grants the runtime and passes to it as SKILLS_S3_URI.
 #
-#   sh agentcore/setup-skills-bucket.sh neworg
+#   sh agentcore/setup-skills-bucket.sh default
 #
 # Uploads without --delete, so nothing already in the bucket is removed.
-# Refuses to run for the original "default" target, whose bucket already exists.
+# Refuses to run for the original account (485530831632), whose bucket already exists.
 set -eu
 TARGET="${1:?usage: setup-skills-bucket.sh <deploy-target-name>}"
-[ "$TARGET" = "default" ] && { echo "Refusing: the default target's bucket already exists." >&2; exit 1; }
 
 cd "$(dirname "$0")/.."
 read -r ACCOUNT REGION <<EOF
 $(python3 -c "import json,sys; t=next(t for t in json.load(open('agentcore/aws-targets.json')) if t['name']==sys.argv[1]); print(t['account'], t['region'])" "$TARGET")
 EOF
+[ "$ACCOUNT" = "485530831632" ] && { echo "Refusing: $TARGET is the original account, whose bucket already exists." >&2; exit 1; }
 BUCKET="storyblok-agentcore-skills-$ACCOUNT"
 
 ACTIVE="$(aws sts get-caller-identity --query Account --output text)"

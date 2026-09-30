@@ -4,6 +4,65 @@
       "resources": {
         "runtimes": {
           "storyblokAgentGatewayTS": {
+            "runtimeId": "reInventDemo_storyblokAgentGatewayTS-LMdhV34umz",
+            "runtimeArn": "arn:aws:bedrock-agentcore:us-east-1:484941465042:runtime/reInventDemo_storyblokAgentGatewayTS-LMdhV34umz",
+            "roleArn": "arn:aws:iam::484941465042:role/AgentCore-reInventDemo-de-ApplicationAgentStoryblok-yiV6UZqUHsc4"
+          }
+        },
+        "gateways": {
+          "reInventDemoGateway": {
+            "gatewayId": "reinventdemo-reinventdemogateway-gncvfzbsrl",
+            "gatewayArn": "arn:aws:bedrock-agentcore:us-east-1:484941465042:gateway/reinventdemo-reinventdemogateway-gncvfzbsrl",
+            "gatewayUrl": "https://reinventdemo-reinventdemogateway-gncvfzbsrl.gateway.bedrock-agentcore.us-east-1.amazonaws.com"
+          },
+          "StoryblokMCPGateway": {
+            "gatewayId": "reinventdemo-storyblokmcpgateway-0e7wrwaivf",
+            "gatewayArn": "arn:aws:bedrock-agentcore:us-east-1:484941465042:gateway/reinventdemo-storyblokmcpgateway-0e7wrwaivf",
+            "gatewayUrl": "https://reinventdemo-storyblokmcpgateway-0e7wrwaivf.gateway.bedrock-agentcore.us-east-1.amazonaws.com"
+          }
+        },
+        "credentials": {
+          "storyblok-mcp-pat": {
+            "credentialProviderArn": "arn:aws:bedrock-agentcore:us-east-1:484941465042:token-vault/default/apikeycredentialprovider/storyblok-mcp-pat"
+          }
+        },
+        "policyEngines": {
+          "reInventDemoPolicyEngine": {
+            "policyEngineId": "reInventDemo_reInventDemoPolicyEngine-lkweoahj_n",
+            "policyEngineArn": "arn:aws:bedrock-agentcore:us-east-1:484941465042:policy-engine/reInventDemo_reInventDemoPolicyEngine-lkweoahj_n"
+          }
+        },
+        "policies": {
+          "reInventDemoPolicyEngine/denyExecuteDestructive": {
+            "policyId": "denyExecuteDestructive-zooxxp1f04",
+            "policyArn": "arn:aws:bedrock-agentcore:us-east-1:484941465042:policy-engine/reInventDemo_reInventDemoPolicyEngine-lkweoahj_n/policy/denyExecuteDestructive-zooxxp1f04",
+            "engineName": "reInventDemoPolicyEngine"
+          },
+          "reInventDemoPolicyEngine/allowDiscoveryTools": {
+            "policyId": "allowDiscoveryTools-34pcb1axq5",
+            "policyArn": "arn:aws:bedrock-agentcore:us-east-1:484941465042:policy-engine/reInventDemo_reInventDemoPolicyEngine-lkweoahj_n/policy/allowDiscoveryTools-34pcb1axq5",
+            "engineName": "reInventDemoPolicyEngine"
+          },
+          "reInventDemoPolicyEngine/allowScopedOperations": {
+            "policyId": "allowScopedOperations-qgwjjxalhv",
+            "policyArn": "arn:aws:bedrock-agentcore:us-east-1:484941465042:policy-engine/reInventDemo_reInventDemoPolicyEngine-lkweoahj_n/policy/allowScopedOperations-qgwjjxalhv",
+            "engineName": "reInventDemoPolicyEngine"
+          },
+          "reInventDemoPolicyEngine/allowStoryblokAiTools": {
+            "policyId": "allowStoryblokAiTools-9j6t6q9t_f",
+            "policyArn": "arn:aws:bedrock-agentcore:us-east-1:484941465042:policy-engine/reInventDemo_reInventDemoPolicyEngine-lkweoahj_n/policy/allowStoryblokAiTools-9j6t6q9t_f",
+            "engineName": "reInventDemoPolicyEngine"
+          }
+        },
+        "stackName": "AgentCore-reInventDemo-default",
+        "identityKmsKeyArn": "arn:aws:kms:us-east-1:484941465042:key/db00242f-9afa-4ffd-a1ad-79c68c220d0a",
+        "deployHash": "195aa1f777e52557"
+      }
+    },
+    "original": {
+      "resources": {
+        "runtimes": {
+          "storyblokAgentGatewayTS": {
             "runtimeId": "reInventDemo_storyblokAgentGatewayTS-ktiKfjAQaC",
             "runtimeArn": "arn:aws:bedrock-agentcore:us-east-1:485530831632:runtime/reInventDemo_storyblokAgentGatewayTS-ktiKfjAQaC",
             "roleArn": "arn:aws:iam::485530831632:role/AgentCore-reInventDemo-de-ApplicationAgentStoryblok-oLWMHK7d8dR5"
@@ -23,7 +82,7 @@
         },
         "credentials": {
           "storyblok-mcp-pat": {
-            "credentialProviderArn": "arn:aws:bedrock-agentcore:us-east-1:485530831632:token-vault/default/apikeycredentialprovider/storyblok-mcp-pat"
+            "credentialProviderArn": "arn:aws:bedrock-agentcore:us-east-1:484941465042:token-vault/default/apikeycredentialprovider/storyblok-mcp-pat"
           }
         },
         "policyEngines": {
@@ -55,67 +114,8 @@
           }
         },
         "stackName": "AgentCore-reInventDemo-default",
-        "identityKmsKeyArn": "arn:aws:kms:us-east-1:485530831632:key/a93a058a-1d3b-4529-b023-d1c207ed049a",
-        "deployHash": "5156808684649652"
-      }
-    },
-    "neworg": {
-      "resources": {
-        "runtimes": {
-          "storyblokAgentGatewayTS": {
-            "runtimeId": "reInventDemo_storyblokAgentGatewayTS-u0Osc93BYC",
-            "runtimeArn": "arn:aws:bedrock-agentcore:us-east-1:484941465042:runtime/reInventDemo_storyblokAgentGatewayTS-u0Osc93BYC",
-            "roleArn": "arn:aws:iam::484941465042:role/AgentCore-reInventDemo-ne-ApplicationAgentStoryblok-3zbifrwLqXm3"
-          }
-        },
-        "gateways": {
-          "reInventDemoGateway": {
-            "gatewayId": "reinventdemo-reinventdemogateway-pdoukb7kw0",
-            "gatewayArn": "arn:aws:bedrock-agentcore:us-east-1:484941465042:gateway/reinventdemo-reinventdemogateway-pdoukb7kw0",
-            "gatewayUrl": "https://reinventdemo-reinventdemogateway-pdoukb7kw0.gateway.bedrock-agentcore.us-east-1.amazonaws.com"
-          },
-          "StoryblokMCPGateway": {
-            "gatewayId": "reinventdemo-storyblokmcpgateway-zvafa5s0sc",
-            "gatewayArn": "arn:aws:bedrock-agentcore:us-east-1:484941465042:gateway/reinventdemo-storyblokmcpgateway-zvafa5s0sc",
-            "gatewayUrl": "https://reinventdemo-storyblokmcpgateway-zvafa5s0sc.gateway.bedrock-agentcore.us-east-1.amazonaws.com"
-          }
-        },
-        "credentials": {
-          "storyblok-mcp-pat": {
-            "credentialProviderArn": "arn:aws:bedrock-agentcore:us-east-1:484941465042:token-vault/default/apikeycredentialprovider/storyblok-mcp-pat"
-          }
-        },
-        "policyEngines": {
-          "reInventDemoPolicyEngine": {
-            "policyEngineId": "reInventDemo_reInventDemoPolicyEngine-zwyisvj0ua",
-            "policyEngineArn": "arn:aws:bedrock-agentcore:us-east-1:484941465042:policy-engine/reInventDemo_reInventDemoPolicyEngine-zwyisvj0ua"
-          }
-        },
-        "policies": {
-          "reInventDemoPolicyEngine/denyExecuteDestructive": {
-            "policyId": "denyExecuteDestructive-1gqpr05wdb",
-            "policyArn": "arn:aws:bedrock-agentcore:us-east-1:484941465042:policy-engine/reInventDemo_reInventDemoPolicyEngine-zwyisvj0ua/policy/denyExecuteDestructive-1gqpr05wdb",
-            "engineName": "reInventDemoPolicyEngine"
-          },
-          "reInventDemoPolicyEngine/allowDiscoveryTools": {
-            "policyId": "allowDiscoveryTools-hidywh60qq",
-            "policyArn": "arn:aws:bedrock-agentcore:us-east-1:484941465042:policy-engine/reInventDemo_reInventDemoPolicyEngine-zwyisvj0ua/policy/allowDiscoveryTools-hidywh60qq",
-            "engineName": "reInventDemoPolicyEngine"
-          },
-          "reInventDemoPolicyEngine/allowScopedOperations": {
-            "policyId": "allowScopedOperations-1aqj_zbeok",
-            "policyArn": "arn:aws:bedrock-agentcore:us-east-1:484941465042:policy-engine/reInventDemo_reInventDemoPolicyEngine-zwyisvj0ua/policy/allowScopedOperations-1aqj_zbeok",
-            "engineName": "reInventDemoPolicyEngine"
-          },
-          "reInventDemoPolicyEngine/allowStoryblokAiTools": {
-            "policyId": "allowStoryblokAiTools-ea7qmggho9",
-            "policyArn": "arn:aws:bedrock-agentcore:us-east-1:484941465042:policy-engine/reInventDemo_reInventDemoPolicyEngine-zwyisvj0ua/policy/allowStoryblokAiTools-ea7qmggho9",
-            "engineName": "reInventDemoPolicyEngine"
-          }
-        },
-        "stackName": "AgentCore-reInventDemo-neworg",
         "identityKmsKeyArn": "arn:aws:kms:us-east-1:484941465042:key/db00242f-9afa-4ffd-a1ad-79c68c220d0a",
-        "deployHash": "841468881c89b295"
+        "deployHash": "5156808684649652"
       }
     }
   }

@@ -7,12 +7,11 @@
 # from agentcore/.cli/deployed-state.json (written by that deploy), so nothing
 # account-specific is hard-coded here.
 #
-#   sh agentcore/gateway-targets/create-targets.sh neworg
+#   sh agentcore/gateway-targets/create-targets.sh default
 #
-# Refuses to run for the original "default" target, which already has both.
+# Refuses to run for the original account (485530831632), which already has both.
 set -eu
 TARGET="${1:?usage: create-targets.sh <deploy-target-name>}"
-[ "$TARGET" = "default" ] && { echo "Refusing: the default target already has its Gateway targets." >&2; exit 1; }
 
 cd "$(dirname "$0")/../.."
 OUT="$(mktemp -d)"
@@ -20,7 +19,10 @@ python3 - "$TARGET" "$OUT" <<'EOF'
 import json, sys
 target, out = sys.argv[1], sys.argv[2]
 targets = json.load(open('agentcore/aws-targets.json'))
-region = next(t['region'] for t in targets if t['name'] == target)
+t = next(t for t in targets if t['name'] == target)
+if t['account'] == '485530831632':
+    sys.exit(f'Refusing: {target} is the original account, which already has its Gateway targets.')
+region = t['region']
 res = json.load(open('agentcore/.cli/deployed-state.json'))['targets'][target]['resources']
 gateway_id = res['gateways']['reInventDemoGateway']['gatewayId']
 provider = res['credentials']['storyblok-mcp-pat']['credentialProviderArn']
